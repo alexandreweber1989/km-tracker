@@ -65,6 +65,17 @@ function haversineKm(lat1, lon1, lat2, lon2) {
 
 const formatBRL = (n) => 'R$ ' + n.toFixed(2).replace('.', ',');
 
+function buildAddressWithNumber(address, number) {
+  if (!number) return address;
+  if (address.includes(`, ${number} `) || address.includes(`, ${number},`) || address.endsWith(`, ${number}`)) return address;
+  const dashIdx = address.indexOf(' - ');
+  if (dashIdx > -1) {
+    const street = address.substring(0, dashIdx).split(',')[0].trim();
+    return `${street}, ${number}${address.substring(address.indexOf(' - '))}`;
+  }
+  return `${address}, ${number}`;
+}
+
 const STORAGE_KEY = 'km_trips_v1';
 function loadTrips() {
   try {
@@ -403,7 +414,15 @@ export default function KmTracker() {
   const [historyOpen, setHistoryOpen] = useState(true);
   const [activeTab, setActiveTab] = useState('history'); // 'history' | 'dashboard'
   const [time, setTime] = useState('');
+  const [originSuggestions, setOriginSuggestions] = useState([]);
+  const [destSuggestions, setDestSuggestions] = useState([]);
+  const [originNumber, setOriginNumber] = useState('');
+  const [destNumber, setDestNumber] = useState('');
   const initialized = useRef(false);
+  const originTyping = useRef(false);
+  const destTyping = useRef(false);
+  const originBase = useRef({ address: '', lat: null, lng: null });
+  const destBase = useRef({ address: '', lat: null, lng: null });
 
   useEffect(() => {
     const update = () => {
@@ -506,6 +525,93 @@ export default function KmTracker() {
     return () => { cancelled = true; };
   }, [origin.lat, origin.lng, destination.lat, destination.lng]);
 
+  // Autocomplete origin
+  useEffect(() => {
+    if (!originTyping.current) return;
+    const q = origin.address.trim();
+    if (q.length < 3) { setOriginSuggestions([]); return; }
+    const timer = setTimeout(async () => {
+      try {
+        const r = await fetch(`https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(q)}&format=json&addressdetails=1&limit=5&accept-language=pt-BR&countrycodes=br`);
+        const data = await r.json();
+        if (originTyping.current) setOriginSuggestions(data.map(d => ({ display: formatBrazilianAddress(d), lat: +d.lat, lng: +d.lon })));
+      } catch { setOriginSuggestions([]); }
+    }, 400);
+    return () => clearTimeout(timer);
+  }, [origin.address]);
+
+  // Autocomplete destination
+  useEffect(() => {
+    if (!destTyping.current) return;
+    const q = destination.address.trim();
+    if (q.length < 3) { setDestSuggestions([]); return; }
+    const timer = setTimeout(async () => {
+      try {
+        const r = await fetch(`https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(q)}&format=json&addressdetails=1&limit=5&accept-language=pt-BR&countrycodes=br`);
+        const data = await r.json();
+        if (destTyping.current) setDestSuggestions(data.map(d => ({ display: formatBrazilianAddress(d), lat: +d.lat, lng: +d.lon })));
+      } catch { setDestSuggestions([]); }
+    }, 400);
+    return () => clearTimeout(timer);
+  }, [destination.address]);
+
+  // Refine origin with house number
+  useEffect(() => {
+    const num = originNumber.trim();
+    const base = originBase.current;
+    if (!num || !base.lat || !base.address) return;
+    const street = base.address.split(' - ')[0].split(',')[0].trim();
+    const rest = base.address.split(' - ').slice(1).join(' - ').trim();
+    const query = rest ? `${street}, ${num}, ${rest}` : `${street}, ${num}`;
+    const timer = setTimeout(async () => {
+      try {
+        const r = await fetch(`https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(query)}&format=json&addressdetails=1&limit=1&accept-language=pt-BR&countrycodes=br`);
+        const data = await r.json();
+        if (data.length > 0) {
+          originTyping.current = false;
+          setOrigin({ address: formatBrazilianAddress(data[0]), lat: +data[0].lat, lng: +data[0].lon });
+        }
+      } catch {}
+    }, 800);
+    return () => clearTimeout(timer);
+  }, [originNumber]);
+
+  // Refine destination with house number
+  useEffect(() => {
+    const num = destNumber.trim();
+    const base = destBase.current;
+    if (!num || !base.lat || !base.address) return;
+    const street = base.address.split(' - ')[0].split(',')[0].trim();
+    const rest = base.address.split(' - ').slice(1).join(' - ').trim();
+    const query = rest ? `${street}, ${num}, ${rest}` : `${street}, ${num}`;
+    const timer = setTimeout(async () => {
+      try {
+        const r = await fetch(`https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(query)}&format=json&addressdetails=1&limit=1&accept-language=pt-BR&countrycodes=br`);
+        const data = await r.json();
+        if (data.length > 0) {
+          destTyping.current = false;
+          setDestination({ address: formatBrazilianAddress(data[0]), lat: +data[0].lat, lng: +data[0].lon });
+        }
+      } catch {}
+    }, 800);
+    return () => clearTimeout(timer);
+  }, [destNumber]);
+
+  function selectSuggestion(which, suggestion) {
+    const loc = { address: suggestion.display, lat: suggestion.lat, lng: suggestion.lng };
+    if (which === 'origin') {
+      originTyping.current = false;
+      setOrigin(loc);
+      originBase.current = loc;
+      setOriginSuggestions([]);
+    } else {
+      destTyping.current = false;
+      setDestination(loc);
+      destBase.current = loc;
+      setDestSuggestions([]);
+    }
+  }
+
   async function capture(which) {
     setError(null); setLoading(s => ({ ...s, [which]: true }));
     try {
@@ -522,13 +628,26 @@ export default function KmTracker() {
       const r = await fetch(`https://nominatim.openstreetmap.org/reverse?lat=${pos.lat}&lon=${pos.lng}&format=json&accept-language=pt-BR&addressdetails=1`);
       const data = await r.json();
       const address = formatBrazilianAddress(data);
-      (which === 'origin' ? setOrigin : setDestination)({ address, lat: pos.lat, lng: pos.lng });
+      const loc = { address, lat: pos.lat, lng: pos.lng };
+      if (which === 'origin') {
+        setOrigin(loc); originBase.current = loc; setOriginSuggestions([]);
+      } else {
+        setDestination(loc); destBase.current = loc; setDestSuggestions([]);
+      }
     } catch (e) { setError(e.message); }
     finally { setLoading(s => ({ ...s, [which]: false })); }
   }
 
   function clearLocation(which) {
-    (which === 'origin' ? setOrigin : setDestination)({ address: '', lat: null, lng: null });
+    if (which === 'origin') {
+      setOrigin({ address: '', lat: null, lng: null });
+      setOriginNumber(''); setOriginSuggestions([]);
+      originBase.current = { address: '', lat: null, lng: null };
+    } else {
+      setDestination({ address: '', lat: null, lng: null });
+      setDestNumber(''); setDestSuggestions([]);
+      destBase.current = { address: '', lat: null, lng: null };
+    }
   }
 
   function handleSave() {
@@ -537,8 +656,8 @@ export default function KmTracker() {
     const newTrip = {
       id: 't' + Date.now(),
       date: `${String(d.getDate()).padStart(2,'0')}/${String(d.getMonth()+1).padStart(2,'0')}/${d.getFullYear()}`,
-      origin: origin.address.trim(),
-      destination: destination.address.trim(),
+      origin: buildAddressWithNumber(origin.address.trim(), originNumber.trim()),
+      destination: buildAddressWithNumber(destination.address.trim(), destNumber.trim()),
       km: distance != null ? Number(distance.toFixed(2)) : null,
       kmLabel: distanceLabel,
       geometry: routeGeometry,
@@ -546,6 +665,10 @@ export default function KmTracker() {
     setTrips(prev => [newTrip, ...prev]);
     setOrigin({ address:'', lat:null, lng:null });
     setDestination({ address:'', lat:null, lng:null });
+    setOriginNumber(''); setDestNumber('');
+    setOriginSuggestions([]); setDestSuggestions([]);
+    originBase.current = { address:'', lat:null, lng:null };
+    destBase.current = { address:'', lat:null, lng:null };
     setDistance(null); setDistanceLabel(''); setRouteGeometry(null); setError(null);
     setSuccess('Viagem registrada'); setTimeout(() => setSuccess(null), 2200);
   }
@@ -710,7 +833,24 @@ export default function KmTracker() {
               </label>
               {origin.address && <button onClick={() => clearLocation('origin')} style={{ fontFamily:fM, fontSize:10, color:C.inkFaded, background:'none', letterSpacing:'0.1em', textTransform:'uppercase' }}>clear</button>}
             </div>
-            <textarea value={origin.address} onChange={e => setOrigin({...origin, address:e.target.value})} placeholder="Endereço de partida" rows={2} style={s.textarea} />
+            <div style={{ position:'relative' }}>
+              <textarea value={origin.address} onChange={e => { originTyping.current = true; setOrigin({ address: e.target.value, lat: null, lng: null }); }} onBlur={() => setTimeout(() => setOriginSuggestions([]), 200)} placeholder="Digite o endereço de partida" rows={2} style={s.textarea} />
+              {originSuggestions.length > 0 && (
+                <div style={{ position:'absolute', top:'100%', left:0, right:0, zIndex:20, backgroundColor:C.card, borderRadius:12, marginTop:4, boxShadow:'0 8px 24px rgba(10,9,8,0.15)', border:`1.5px solid ${C.border}`, overflow:'hidden', maxHeight:200, overflowY:'auto' }}>
+                  {originSuggestions.map((sg, i) => (
+                    <button key={i} onMouseDown={e => e.preventDefault()} onClick={() => selectSuggestion('origin', sg)} style={{ width:'100%', padding:'10px 14px', background:'none', textAlign:'left', fontSize:12, fontFamily:fB, color:C.inkSoft, lineHeight:1.4, borderTop: i > 0 ? `1px solid ${C.border}` : 'none', display:'flex', alignItems:'flex-start', gap:8 }}>
+                      <MapPin size={14} color={C.red} style={{ marginTop:2, flexShrink:0 }} strokeWidth={2.2} />
+                      <span>{sg.display}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+            <div style={{ display:'flex', alignItems:'center', gap:8, marginTop:8 }}>
+              <label style={{ fontFamily:fM, fontSize:10, color:C.inkFaded, letterSpacing:'0.12em', whiteSpace:'nowrap' }}>Nº</label>
+              <input value={originNumber} onChange={e => setOriginNumber(e.target.value)} placeholder="Número" style={{ width:110, padding:'8px 12px', fontSize:13, fontFamily:fB, color:C.ink, backgroundColor:C.bg, border:`1.5px solid ${C.border}`, borderRadius:10, fontWeight:500 }} />
+              {origin.lat && <span style={{ fontFamily:fM, fontSize:9, color:C.green, letterSpacing:'0.08em', marginLeft:'auto' }}>● coordenadas OK</span>}
+            </div>
             <button onClick={() => capture('origin')} disabled={loading.origin} className="km-press" style={{ ...s.btnRed, background: loading.origin ? C.borderDark : s.btnRed.background, boxShadow: loading.origin ? 'none' : s.btnRed.boxShadow, cursor: loading.origin ? 'not-allowed' : 'pointer' }}>
               {loading.origin ? <><Loader2 size={16} className="km-spin" /> Buscando…</> : <><MapPin size={16} strokeWidth={2.4} /> Capturar localização</>}
             </button>
@@ -732,7 +872,24 @@ export default function KmTracker() {
               </label>
               {destination.address && <button onClick={() => clearLocation('destination')} style={{ fontFamily:fM, fontSize:10, color:C.inkFaded, background:'none', letterSpacing:'0.1em', textTransform:'uppercase' }}>clear</button>}
             </div>
-            <textarea value={destination.address} onChange={e => setDestination({...destination, address:e.target.value})} placeholder="Endereço de chegada" rows={2} style={s.textarea} />
+            <div style={{ position:'relative' }}>
+              <textarea value={destination.address} onChange={e => { destTyping.current = true; setDestination({ address: e.target.value, lat: null, lng: null }); }} onBlur={() => setTimeout(() => setDestSuggestions([]), 200)} placeholder="Digite o endereço de chegada" rows={2} style={s.textarea} />
+              {destSuggestions.length > 0 && (
+                <div style={{ position:'absolute', top:'100%', left:0, right:0, zIndex:20, backgroundColor:C.card, borderRadius:12, marginTop:4, boxShadow:'0 8px 24px rgba(10,9,8,0.15)', border:`1.5px solid ${C.border}`, overflow:'hidden', maxHeight:200, overflowY:'auto' }}>
+                  {destSuggestions.map((sg, i) => (
+                    <button key={i} onMouseDown={e => e.preventDefault()} onClick={() => selectSuggestion('destination', sg)} style={{ width:'100%', padding:'10px 14px', background:'none', textAlign:'left', fontSize:12, fontFamily:fB, color:C.inkSoft, lineHeight:1.4, borderTop: i > 0 ? `1px solid ${C.border}` : 'none', display:'flex', alignItems:'flex-start', gap:8 }}>
+                      <Flag size={14} color={C.black} style={{ marginTop:2, flexShrink:0 }} strokeWidth={2.2} />
+                      <span>{sg.display}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+            <div style={{ display:'flex', alignItems:'center', gap:8, marginTop:8 }}>
+              <label style={{ fontFamily:fM, fontSize:10, color:C.inkFaded, letterSpacing:'0.12em', whiteSpace:'nowrap' }}>Nº</label>
+              <input value={destNumber} onChange={e => setDestNumber(e.target.value)} placeholder="Número" style={{ width:110, padding:'8px 12px', fontSize:13, fontFamily:fB, color:C.ink, backgroundColor:C.bg, border:`1.5px solid ${C.border}`, borderRadius:10, fontWeight:500 }} />
+              {destination.lat && <span style={{ fontFamily:fM, fontSize:9, color:C.green, letterSpacing:'0.08em', marginLeft:'auto' }}>● coordenadas OK</span>}
+            </div>
             <button onClick={() => capture('destination')} disabled={loading.destination} className="km-press" style={{ ...s.btnBlack, background: loading.destination ? C.borderDark : C.black, boxShadow: loading.destination ? 'none' : s.btnBlack.boxShadow, cursor: loading.destination ? 'not-allowed' : 'pointer' }}>
               {loading.destination ? <><Loader2 size={16} className="km-spin" /> Buscando…</> : <><Flag size={16} strokeWidth={2.4} /> Capturar localização</>}
             </button>
