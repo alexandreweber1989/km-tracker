@@ -1,0 +1,18 @@
+{
+  "name": "Controle de KM",
+  "short_name": "KM Tracker",
+  "description": "Controle de quilometragem rodada",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#F4F1ED",
+  "theme_color": "#E61A27",
+  "orientation": "portrait",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
