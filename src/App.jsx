@@ -510,16 +510,35 @@ export default function KmTracker() {
     return () => { cancelled = true; };
   }, [origin.lat, origin.lng, destination.lat, destination.lng]);
 
+  function buildSuggestions(data, typedNum) {
+    return data.map(d => {
+      const hasNum = !!d.address?.house_number;
+      let display = formatBrazilianAddress(d);
+      if (typedNum && !hasNum) {
+        const dashIdx = display.indexOf(' - ');
+        if (dashIdx > -1) {
+          const street = display.substring(0, dashIdx).split(',')[0].trim();
+          display = `${street}, ${typedNum}${display.substring(dashIdx)}`;
+        } else {
+          display = `${display}, ${typedNum}`;
+        }
+      }
+      return { display, lat: +d.lat, lng: +d.lon, refineNum: typedNum && !hasNum ? typedNum : null };
+    });
+  }
+
   // Autocomplete origin
   useEffect(() => {
     if (!originTyping.current) return;
     const q = origin.address.trim();
     if (q.length < 3) { setOriginSuggestions([]); return; }
+    const numMatch = q.match(/[\s,]+(\d{1,5})(?:\s*[-,]|\s|$)/);
+    const typedNum = numMatch ? numMatch[1] : '';
     const timer = setTimeout(async () => {
       try {
         const r = await fetch(`https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(q)}&format=json&addressdetails=1&limit=5&accept-language=pt-BR&countrycodes=br`);
         const data = await r.json();
-        if (originTyping.current) setOriginSuggestions(data.map(d => ({ display: formatBrazilianAddress(d), lat: +d.lat, lng: +d.lon })));
+        if (originTyping.current) setOriginSuggestions(buildSuggestions(data, typedNum));
       } catch { setOriginSuggestions([]); }
     }, 400);
     return () => clearTimeout(timer);
@@ -530,26 +549,35 @@ export default function KmTracker() {
     if (!destTyping.current) return;
     const q = destination.address.trim();
     if (q.length < 3) { setDestSuggestions([]); return; }
+    const numMatch = q.match(/[\s,]+(\d{1,5})(?:\s*[-,]|\s|$)/);
+    const typedNum = numMatch ? numMatch[1] : '';
     const timer = setTimeout(async () => {
       try {
         const r = await fetch(`https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(q)}&format=json&addressdetails=1&limit=5&accept-language=pt-BR&countrycodes=br`);
         const data = await r.json();
-        if (destTyping.current) setDestSuggestions(data.map(d => ({ display: formatBrazilianAddress(d), lat: +d.lat, lng: +d.lon })));
+        if (destTyping.current) setDestSuggestions(buildSuggestions(data, typedNum));
       } catch { setDestSuggestions([]); }
     }, 400);
     return () => clearTimeout(timer);
   }, [destination.address]);
 
   function selectSuggestion(which, suggestion) {
-    const loc = { address: suggestion.display, lat: suggestion.lat, lng: suggestion.lng };
-    if (which === 'origin') {
-      originTyping.current = false;
-      setOrigin(loc);
-      setOriginSuggestions([]);
-    } else {
-      destTyping.current = false;
-      setDestination(loc);
-      setDestSuggestions([]);
+    const setSt = which === 'origin' ? setOrigin : setDestination;
+    const setSugg = which === 'origin' ? setOriginSuggestions : setDestSuggestions;
+    if (which === 'origin') originTyping.current = false; else destTyping.current = false;
+    setSugg([]);
+    setSt({ address: suggestion.display, lat: suggestion.lat, lng: suggestion.lng });
+
+    if (suggestion.refineNum) {
+      const street = suggestion.display.split(' - ')[0].split(',')[0].trim();
+      const rest = suggestion.display.split(' - ').slice(1).join(' - ').trim();
+      const query = rest ? `${street}, ${suggestion.refineNum}, ${rest}` : `${street}, ${suggestion.refineNum}`;
+      fetch(`https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(query)}&format=json&addressdetails=1&limit=1&accept-language=pt-BR&countrycodes=br`)
+        .then(r => r.json())
+        .then(data => {
+          if (data.length > 0) setSt({ address: formatBrazilianAddress(data[0]), lat: +data[0].lat, lng: +data[0].lon });
+        })
+        .catch(() => {});
     }
   }
 
