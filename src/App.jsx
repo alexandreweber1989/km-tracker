@@ -324,11 +324,11 @@ export default function KmTracker(){
 
             <section className="km-card">
               <header className="km-card-head km-card-head--bordered"><div className="km-row-tight"><span className="km-redbar"/><h2 className="km-h2">Nova viagem</h2></div><span className="km-mono km-mono-tiny km-muted">001/REC</span></header>
-              <div className="km-field"><div className="km-field-head"><label className="km-mono km-mono-label"><span className="km-dot km-dot--red"/>· ORIGEM</label>{origin.address&&<button onClick={()=>clearLocation('origin')} className="km-textbtn">CLEAR</button>}</div><div className="km-autocomplete"><textarea value={origin.address} onChange={e=>handleAddressInput(e,'origin')} onFocus={()=>originSuggestions.length>0&&setShowOriginDrop(true)} onBlur={()=>setTimeout(()=>setShowOriginDrop(false),200)} placeholder="Digite o endereço de partida" rows={2} className="km-textarea"/>{showOriginDrop&&originSuggestions.length>0&&(<ul className="km-suggestions">{originSuggestions.map((s,i)=>(<li key={i} onMouseDown={()=>selectSuggestion(s,'origin')} className="km-suggestion-item">{s.label}</li>))}</ul>)}</div><button onClick={()=>capture('origin')} disabled={loading.origin} className="km-btn km-btn--red km-btn--block km-press">{loading.origin?<><Loader2 size={15} className="km-spin"/> BUSCANDO…</>:<><MapPin size={15} strokeWidth={2.4}/> CAPTURAR LOCALIZAÇÃO</>}</button></div>
+              <div className="km-field"><div className="km-field-head"><label htmlFor="origin-address" className="km-mono km-mono-label"><span className="km-dot km-dot--red"/>· ORIGEM</label>{origin.address&&<button onClick={()=>clearLocation('origin')} className="km-textbtn" aria-label="Limpar endereço de origem">CLEAR</button>}</div><div className="km-autocomplete"><textarea id="origin-address" value={origin.address} onChange={e=>handleAddressInput(e,'origin')} onFocus={()=>originSuggestions.length>0&&setShowOriginDrop(true)} onBlur={()=>setTimeout(()=>setShowOriginDrop(false),200)} placeholder="Digite o endereço de partida" rows={2} className="km-textarea" aria-label="Endereço de origem" aria-describedby="origin-help" aria-autocomplete="list" aria-controls="origin-suggestions"/>{showOriginDrop&&originSuggestions.length>0&&(<ul id="origin-suggestions" className="km-suggestions" role="listbox">{originSuggestions.map((s,i)=>(<li key={i} onMouseDown={()=>selectSuggestion(s,'origin')} className="km-suggestion-item" role="option">{s.label}</li>))}</ul>)}</div><div id="origin-help" className="km-mono km-mono-tiny km-muted" style={{marginTop:'4px'}}>Comece a digitar para autocomplete ou clique abaixo para usar GPS</div><button onClick={()=>capture('origin')} disabled={loading.origin} className="km-btn km-btn--red km-btn--block km-press" aria-label={loading.origin?'Buscando localização de origem':'Capturar localização de origem'}>{loading.origin?<><Loader2 size={15} className="km-spin"/> BUSCANDO…</>:<><MapPin size={15} strokeWidth={2.4}/> CAPTURAR LOCALIZAÇÃO</>}</button></div>
               <div className="km-connector"><ArrowDown size={11} strokeWidth={2.4}/><div className="km-dashed"/><span className="km-mono km-mono-tiny">DESTINO</span><div className="km-dashed"/></div>
-              <div className="km-field"><div className="km-field-head"><label className="km-mono km-mono-label"><Flag size={11} strokeWidth={2.4} fill="currentColor"/>· DESTINO</label>{destination.address&&<button onClick={()=>clearLocation('destination')} className="km-textbtn">CLEAR</button>}</div><div className="km-autocomplete"><textarea value={destination.address} onChange={e=>handleAddressInput(e,'destination')} onFocus={()=>destSuggestions.length>0&&setShowDestDrop(true)} onBlur={()=>setTimeout(()=>setShowDestDrop(false),200)} placeholder="Digite o endereço de chegada" rows={2} className="km-textarea"/>{showDestDrop&&destSuggestions.length>0&&(<ul className="km-suggestions">{destSuggestions.map((s,i)=>(<li key={i} onMouseDown={()=>selectSuggestion(s,'destination')} className="km-suggestion-item">{s.label}</li>))}</ul>)}</div><button onClick={()=>capture('destination')} disabled={loading.destination} className="km-btn km-btn--ink km-btn--block km-press">{loading.destination?<><Loader2 size={15} className="km-spin"/> BUSCANDO…</>:<><Flag size={15} strokeWidth={2.4}/> CAPTURAR LOCALIZAÇÃO</>}</button></div>
-              <div className="km-odometer"><div className="km-odometer-glow"/><div className="km-odometer-grid"/><div className="km-odometer-info"><div className="km-mono km-mono-label km-odometer-label">◊ DISTÂNCIA</div>{distance!=null&&<div className="km-odometer-money">{brlFmt.format(distance*RATE)}</div>}{distanceLabel&&<div className="km-mono km-mono-tiny km-odometer-sublabel">{distanceLabel}</div>}</div><div className="km-odometer-display">{loading.distance?<Loader2 size={28} className="km-spin" style={{color:'var(--coca-red)'}}/>:distance!=null?<div className="km-odometer-num"><span>{numFmt.format(distance)}</span><span className="km-odometer-unit">KM</span></div>:<div className="km-odometer-empty">--.--</div>}</div></div>
-              <button onClick={handleSave} disabled={!canSave} className="km-btn km-btn--save km-btn--block km-press"><Save size={16} strokeWidth={2.4}/> REGISTRAR VIAGEM</button>
+              <div className="km-field"><div className="km-field-head"><label htmlFor="dest-address" className="km-mono km-mono-label"><Flag size={11} strokeWidth={2.4} fill="currentColor"/>· DESTINO</label>{destination.address&&<button onClick={()=>clearLocation('destination')} className="km-textbtn" aria-label="Limpar endereço de destino">CLEAR</button>}</div><div className="km-autocomplete"><textarea id="dest-address" value={destination.address} onChange={e=>handleAddressInput(e,'destination')} onFocus={()=>destSuggestions.length>0&&setShowDestDrop(true)} onBlur={()=>setTimeout(()=>setShowDestDrop(false),200)} placeholder="Digite o endereço de chegada" rows={2} className="km-textarea" aria-label="Endereço de destino" aria-describedby="dest-help" aria-autocomplete="list" aria-controls="dest-suggestions"/>{showDestDrop&&destSuggestions.length>0&&(<ul id="dest-suggestions" className="km-suggestions" role="listbox">{destSuggestions.map((s,i)=>(<li key={i} onMouseDown={()=>selectSuggestion(s,'destination')} className="km-suggestion-item" role="option">{s.label}</li>))}</ul>)}</div><div id="dest-help" className="km-mono km-mono-tiny km-muted" style={{marginTop:'4px'}}>Comece a digitar para autocomplete ou clique abaixo para usar GPS</div><button onClick={()=>capture('destination')} disabled={loading.destination} className="km-btn km-btn--ink km-btn--block km-press" aria-label={loading.destination?'Buscando localização de destino':'Capturar localização de destino'}>{loading.destination?<><Loader2 size={15} className="km-spin"/> BUSCANDO…</>:<><Flag size={15} strokeWidth={2.4}/> CAPTURAR LOCALIZAÇÃO</>}</button></div>
+              <div className="km-odometer" role="region" aria-live="polite" aria-label="Informações de distância"><div className="km-odometer-glow"/><div className="km-odometer-grid"/><div className="km-odometer-info"><div className="km-mono km-mono-label km-odometer-label">◊ DISTÂNCIA</div>{distance!=null&&<div className="km-odometer-money" aria-label={`Valor a receber: ${brlFmt.format(distance*RATE)}`}>{brlFmt.format(distance*RATE)}</div>}{distanceLabel&&<div className="km-mono km-mono-tiny km-odometer-sublabel">{distanceLabel}</div>}</div><div className="km-odometer-display">{loading.distance?<Loader2 size={28} className="km-spin" style={{color:'var(--coca-red)'}} aria-label="Calculando distância"/>:distance!=null?<div className="km-odometer-num"><span aria-label={`${numFmt.format(distance)} quilômetros`}>{numFmt.format(distance)}</span><span className="km-odometer-unit">KM</span></div>:<div className="km-odometer-empty">--.--</div>}</div></div>
+              <button onClick={handleSave} disabled={!canSave} className="km-btn km-btn--save km-btn--block km-press" aria-label={!canSave?'Preencha origem e destino para registrar viagem':'Registrar viagem'}><Save size={16} strokeWidth={2.4}/> REGISTRAR VIAGEM</button>
             </section>
           </div>
 
@@ -381,6 +381,16 @@ const CSS = `
   --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
   --container-max: 448px;
   --gutter: 16px;
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.05);
+  --shadow-md: 0 2px 8px rgba(0, 0, 0, 0.08);
+  --shadow-lg: 0 4px 16px rgba(0, 0, 0, 0.12);
+  --focus-ring: 2px solid var(--coca-red);
+  --transition-fast: 120ms var(--ease-ios);
+  --transition-base: 180ms var(--ease-ios);
+  --transition-slow: 240ms var(--ease-ios);
 }
 @media(min-width:640px){ :root { --container-max: 680px; --gutter: 24px; } }
 @media(min-width:1024px){ :root { --container-max: 960px; --gutter: 32px; } }
@@ -388,8 +398,8 @@ const CSS = `
 
 [data-theme="light"] {
   --bg-base:#FAFAFA;--bg-surface:#FFFFFF;--bg-elevated:#F5F5F5;--bg-overlay:#ECECEC;--bg-dark:#0A0A0A;
-  --text-primary:#09090B;--text-secondary:#52525B;--text-muted:#9A938D;
-  --border-subtle:#E8E0D6;--border-default:#C9BDAE;--border-strong:#0A0A0A;
+  --text-primary:#09090B;--text-secondary:#52525B;--text-muted:#71717A;
+  --border-subtle:#D4D4D8;--border-default:#A1A1AA;--border-strong:#0A0A0A;
   --coca-red:#E61A27;--coca-red-hover:#D11620;--coca-red-active:#B80F1B;
   --coca-red-glow:rgba(230,26,39,0.18);--coca-red-soft:rgba(230,26,39,0.08);
   --status-green:#16A34A;--map-grid:rgba(10,9,8,0.06);
@@ -412,6 +422,7 @@ body{font-family:var(--font-body);color:var(--text-primary);-webkit-font-smoothi
 
 /* ─── ANIMATIONS ─── */
 @keyframes fadeUp{from{opacity:0;transform:translateY(10px);}to{opacity:1;transform:translateY(0);}}
+@keyframes slideDown{from{opacity:0;transform:translateY(-8px);}to{opacity:1;transform:translateY(0);}}
 @keyframes fadeIn{from{opacity:0;}to{opacity:1;}}
 @keyframes spin{from{transform:rotate(0);}to{transform:rotate(360deg);}}
 @keyframes pulse{0%,49%{opacity:1;}50%,100%{opacity:0.35;}}
@@ -501,14 +512,17 @@ body{font-family:var(--font-body);color:var(--text-primary);-webkit-font-smoothi
 }
 
 /* ─── ALERTS ─── */
-.km-alert{display:flex;align-items:center;gap:10px;padding:11px 13px;border:1.5px solid var(--border-strong);background:var(--bg-surface);margin-bottom:12px;box-shadow:3px 3px 0 0 var(--border-strong);font-size:13px;font-weight:500;}
+.km-alert{display:flex;align-items:center;gap:10px;padding:12px 14px;border:1.5px solid var(--border-strong);border-radius:var(--radius-md);background:var(--bg-surface);margin-bottom:12px;box-shadow:var(--shadow-md);font-size:13px;font-weight:500;animation:slideDown 0.3s var(--ease-ios);}
 .km-alert p{margin:0;flex:1;line-height:1.4;}
-.km-alert button{background:none;border:none;cursor:pointer;color:var(--text-primary);padding:2px;}
-.km-alert--err{border-color:var(--coca-red);box-shadow:3px 3px 0 0 var(--coca-red);color:var(--coca-red);}
-.km-alert--ok{border-color:var(--text-primary);background:var(--text-primary);color:var(--bg-base);box-shadow:3px 3px 0 0 var(--coca-red);}
+.km-alert button{background:none;border:none;cursor:pointer;color:var(--text-primary);padding:4px;border-radius:var(--radius-sm);transition:background-color var(--transition-fast);}
+.km-alert button:hover{background-color:rgba(0,0,0,0.05);}
+.km-alert button:focus-visible{outline:var(--focus-ring);outline-offset:2px;}
+.km-alert--err{border-color:var(--coca-red);background:rgba(230,26,39,0.04);color:var(--coca-red);}
+.km-alert--ok{border-color:var(--status-green);background:rgba(22,163,74,0.04);color:var(--status-green);}
 
 /* ─── CARD ─── */
-.km-card{background:var(--bg-surface);border:1.5px solid var(--border-strong);border-radius:0;padding:18px;margin-bottom:14px;box-shadow:4px 4px 0 0 var(--border-strong);position:relative;}
+.km-card{background:var(--bg-surface);border:1.5px solid var(--border-strong);border-radius:var(--radius-lg);padding:18px;margin-bottom:16px;box-shadow:var(--shadow-md);position:relative;transition:box-shadow var(--transition-base),border-color var(--transition-base);}
+.km-card:hover{box-shadow:var(--shadow-lg);}
 @media(min-width:640px){.km-card{padding:24px;}}
 @media(min-width:1024px){.km-card{padding:28px;}}
 .km-card-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;}
@@ -528,36 +542,50 @@ body{font-family:var(--font-body);color:var(--text-primary);-webkit-font-smoothi
 .km-serif{font-family:var(--font-serif);}
 
 /* ─── FIELDS ─── */
-.km-field{margin-bottom:12px;}
+.km-field{margin-bottom:16px;}
 .km-field-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;}
-.km-textbtn{font-family:var(--font-mono);font-size:10px;letter-spacing:0.1em;color:var(--text-muted);background:none;border:none;cursor:pointer;padding:2px 4px;font-weight:500;}
-.km-textarea{width:100%;padding:11px 13px;font-size:14px;font-family:var(--font-body);color:var(--text-primary);background:var(--bg-base);border:1.5px solid var(--border-default);border-radius:0;resize:none;outline:none;line-height:1.45;font-weight:500;transition:border-color 120ms var(--ease-ios);box-sizing:border-box;}
-.km-textarea:focus{border-color:var(--coca-red);}
+.km-textbtn{font-family:var(--font-mono);font-size:10px;letter-spacing:0.1em;color:var(--text-muted);background:none;border:none;cursor:pointer;padding:4px 6px;font-weight:500;transition:color var(--transition-fast);border-radius:var(--radius-sm);}
+.km-textbtn:hover{color:var(--text-primary);}
+.km-textbtn:focus-visible{outline:var(--focus-ring);outline-offset:2px;}
+.km-textarea{width:100%;padding:11px 13px;font-size:14px;font-family:var(--font-body);color:var(--text-primary);background:var(--bg-base);border:1.5px solid var(--border-default);border-radius:var(--radius-md);resize:none;outline:none;line-height:1.45;font-weight:500;transition:border-color var(--transition-base),box-shadow var(--transition-base),background-color var(--transition-base);box-sizing:border-box;}
+.km-textarea:hover{border-color:var(--coca-red-glow);background-color:var(--coca-red-soft);}
+.km-textarea:focus{border-color:var(--coca-red);box-shadow:inset 0 0 0 1px var(--coca-red),0 0 0 3px var(--coca-red-soft);outline:none;}
+.km-textarea:disabled{opacity:0.6;cursor:not-allowed;}
 .km-autocomplete{position:relative;}
-.km-suggestions{position:absolute;top:100%;left:0;right:0;z-index:50;background:var(--bg-surface);border:1.5px solid var(--border-strong);border-top:none;list-style:none;margin:0;padding:0;max-height:200px;overflow-y:auto;box-shadow:0 4px 12px rgba(0,0,0,0.15);}
-.km-suggestion-item{padding:10px 13px;font-size:13px;font-family:var(--font-body);color:var(--text-primary);cursor:pointer;border-bottom:1px solid var(--border-subtle);line-height:1.35;}
+.km-suggestions{position:absolute;top:calc(100% + 4px);left:0;right:0;z-index:50;background:var(--bg-surface);border:1.5px solid var(--border-default);border-radius:var(--radius-md);list-style:none;margin:0;padding:4px 0;max-height:240px;overflow-y:auto;box-shadow:var(--shadow-lg);animation:fadeUp 0.2s var(--ease-ios);transform-origin:top;}
+.km-suggestion-item{padding:10px 13px;font-size:13px;font-family:var(--font-body);color:var(--text-primary);cursor:pointer;border-bottom:1px solid var(--border-subtle);line-height:1.4;transition:background-color var(--transition-fast),color var(--transition-fast);}
 .km-suggestion-item:last-child{border-bottom:none;}
-.km-suggestion-item:hover{background:var(--bg-base);color:var(--coca-red);}
+.km-suggestion-item:hover{background:var(--coca-red-soft);color:var(--coca-red);font-weight:600;}
+.km-suggestion-item:focus-visible{outline:var(--focus-ring);outline-offset:-2px;}
 .km-dot{display:inline-block;width:9px;height:9px;flex-shrink:0;}
 .km-dot--red{background:radial-gradient(circle at 30% 30%,var(--coca-red),var(--coca-red-active));border-radius:50%;box-shadow:0 0 0 3px var(--coca-red-soft);}
 
 /* ─── BUTTONS ─── */
-.km-btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;padding:11px 14px;border:1.5px solid var(--border-strong);border-radius:0;cursor:pointer;font-family:var(--font-display);font-weight:700;font-size:12px;letter-spacing:0.06em;text-transform:uppercase;background:var(--bg-surface);color:var(--text-primary);box-shadow:3px 3px 0 0 var(--border-strong);transition:transform 120ms var(--ease-ios),box-shadow 120ms var(--ease-ios);}
-.km-btn:active:not(:disabled){transform:translate(3px,3px);box-shadow:0 0 0 0 var(--border-strong);}
-.km-btn:disabled{opacity:0.45;cursor:not-allowed;box-shadow:0 0 0 0 var(--border-strong);}
+.km-btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;padding:11px 14px;border:1.5px solid var(--border-strong);border-radius:var(--radius-md);cursor:pointer;font-family:var(--font-display);font-weight:700;font-size:12px;letter-spacing:0.06em;text-transform:uppercase;background:var(--bg-surface);color:var(--text-primary);box-shadow:var(--shadow-sm);transition:transform var(--transition-fast),box-shadow var(--transition-fast),background var(--transition-fast),color var(--transition-fast);outline:none;}
+.km-btn:hover:not(:disabled){transform:translateY(-2px);box-shadow:var(--shadow-md);}
+.km-btn:focus-visible{outline:var(--focus-ring);outline-offset:2px;}
+.km-btn:active:not(:disabled){transform:translateY(0px);box-shadow:var(--shadow-sm);}
+.km-btn:disabled{opacity:0.45;cursor:not-allowed;}
 .km-btn--block{width:100%;margin-top:8px;}
 .km-btn--small{padding:8px 12px;font-size:11px;}
-.km-btn--red{background:var(--coca-red);color:#FFF;border-color:var(--border-strong);}
-.km-btn--ink{background:var(--text-primary);color:var(--bg-base);}
-.km-btn--save{background:var(--coca-red);color:#FFF;font-size:14px;padding:14px;margin-top:12px;border:2px solid var(--border-strong);box-shadow:5px 5px 0 0 var(--border-strong);letter-spacing:0.08em;}
-.km-btn--save:active:not(:disabled){transform:translate(5px,5px);}
+.km-btn--red{background:var(--coca-red);color:#FFF;border-color:var(--coca-red);}
+.km-btn--red:hover:not(:disabled){background:var(--coca-red-hover);}
+.km-btn--red:active:not(:disabled){background:var(--coca-red-active);}
+.km-btn--ink{background:var(--text-primary);color:var(--bg-base);border-color:var(--text-primary);}
+.km-btn--ink:hover:not(:disabled){opacity:0.9;}
+.km-btn--save{background:var(--coca-red);color:#FFF;font-size:14px;padding:14px;margin-top:16px;border:2px solid var(--coca-red);border-radius:var(--radius-md);box-shadow:var(--shadow-md);letter-spacing:0.08em;font-weight:800;}
+.km-btn--save:hover:not(:disabled){transform:translateY(-2px);box-shadow:var(--shadow-lg);}
+.km-btn--save:focus-visible{outline:var(--focus-ring);outline-offset:2px;}
+.km-btn--save:active:not(:disabled){transform:translateY(0px);}
+.km-btn--press{cursor:pointer;}
 
 /* ─── CONNECTOR ─── */
 .km-connector{display:flex;align-items:center;gap:8px;padding:6px 0;color:var(--text-muted);}
 .km-dashed{flex:1;height:1px;background:repeating-linear-gradient(90deg,var(--border-default) 0 4px,transparent 4px 8px);}
 
 /* ─── ODOMETER ─── */
-.km-odometer{background:var(--bg-dark);border:1.5px solid var(--border-strong);padding:16px 18px;margin:14px 0 12px;display:flex;align-items:center;justify-content:space-between;position:relative;overflow:hidden;box-shadow:4px 4px 0 0 var(--coca-red);}
+.km-odometer{background:var(--bg-dark);border:1.5px solid var(--border-strong);border-radius:var(--radius-lg);padding:16px 18px;margin:16px 0 16px;display:flex;align-items:center;justify-content:space-between;position:relative;overflow:hidden;box-shadow:var(--shadow-lg);transition:box-shadow var(--transition-base);}
+.km-odometer:hover{box-shadow:var(--shadow-lg),inset 0 0 0 1px var(--coca-red-glow);}
 .km-odometer-glow{position:absolute;top:-40px;right:-40px;width:140px;height:140px;border-radius:50%;background:radial-gradient(circle,var(--coca-red-glow),transparent 70%);pointer-events:none;}
 .km-odometer-grid{position:absolute;inset:0;background-image:linear-gradient(rgba(255,255,255,0.06) 1px,transparent 1px);background-size:100% 12px;pointer-events:none;}
 .km-odometer-info{position:relative;z-index:2;}
@@ -571,11 +599,12 @@ body{font-family:var(--font-body);color:var(--text-primary);-webkit-font-smoothi
 @media(min-width:640px){.km-odometer{padding:20px 24px;}.km-odometer-num{font-size:42px;}}
 
 /* ─── TABS ─── */
-.km-tabs{display:flex;background:var(--bg-surface);border:1.5px solid var(--border-strong);margin-bottom:14px;box-shadow:3px 3px 0 0 var(--border-strong);position:relative;z-index:1;}
-.km-tab{flex:1;padding:11px 13px;background:transparent;border:none;cursor:pointer;font-family:var(--font-display);font-weight:700;font-size:11.5px;letter-spacing:0.08em;color:var(--text-muted);display:flex;align-items:center;justify-content:center;gap:6px;transition:all 200ms var(--ease-ios);border-right:1.5px solid var(--border-strong);text-transform:uppercase;}
-.km-tab:last-child{border-right:none;}
-.km-tab--active{background:var(--text-primary);color:var(--bg-base);}
-@media(min-width:640px){.km-tab{padding:13px 18px;font-size:12px;}}
+.km-tabs{display:flex;background:var(--bg-surface);border:1.5px solid var(--border-default);border-radius:var(--radius-md);margin-bottom:16px;box-shadow:var(--shadow-sm);position:relative;z-index:1;padding:2px;}
+.km-tab{flex:1;padding:10px 12px;background:transparent;border:none;border-radius:var(--radius-sm);cursor:pointer;font-family:var(--font-display);font-weight:700;font-size:11.5px;letter-spacing:0.08em;color:var(--text-muted);display:flex;align-items:center;justify-content:center;gap:6px;transition:all var(--transition-base);text-transform:uppercase;}
+.km-tab:hover:not(.km-tab--active){background:var(--coca-red-soft);color:var(--text-primary);}
+.km-tab:focus-visible{outline:var(--focus-ring);outline-offset:2px;}
+.km-tab--active{background:var(--coca-red);color:#FFF;box-shadow:var(--shadow-sm);}
+@media(min-width:640px){.km-tab{padding:12px 16px;font-size:12px;}}
 .km-tabcontent{animation:fadeUp 0.35s var(--ease-ios) both;}
 
 /* ─── HISTORY ─── */
