@@ -1,8 +1,12 @@
-import { useState, useEffect, useRef, useMemo } from 'react';
-import { MapPin, Flag, Save, Download, Trash2, Loader2, AlertCircle, X, Navigation, ChevronDown, ChevronUp, Sparkles, ArrowDown, DollarSign, Calendar, TrendingUp, History } from 'lucide-react';
+import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import { MapPin, Flag, Save, Download, Trash2, Loader2, AlertCircle, X, Navigation, ChevronDown, ChevronUp, ArrowDown, DollarSign, Calendar, TrendingUp, History, Sun, Moon, Volume2, VolumeX, Vibrate } from 'lucide-react';
 import * as XLSX from 'xlsx';
 
-const RATE = 1.14; // R$ por km
+// ═══════════════════════════════════════════════════════════════════════════
+// CONFIG
+// ═══════════════════════════════════════════════════════════════════════════
+const RATE = 1.14; // R$ / km
+const APP_VERSION = 'v3·0';
 
 const SEED_TRIPS = [
   { id: 's1', date: '20/04/2026', origin: 'Rua Attilio Ceccarelli, 90 - Jardim Rio Pequeno, São Paulo - SP, 05388-040', destination: 'Rua dos Marianos, 349 - Centro, Osasco - SP, 06016-050', km: null, geometry: null },
@@ -16,35 +20,35 @@ const SEED_TRIPS = [
   { id: 's9', date: '20/04/2026', origin: 'Rua Fiorino Beltrano, 195 - Centro, Osasco - SP, 06097-040', destination: 'Rua Attilio Ceccarelli, 90 - Jardim Rio Pequeno, São Paulo - SP, 05388-040', km: null, geometry: null },
 ];
 
-const STATE_MAP = {
-  'Acre':'AC','Alagoas':'AL','Amapá':'AP','Amazonas':'AM','Bahia':'BA','Ceará':'CE',
-  'Distrito Federal':'DF','Espírito Santo':'ES','Goiás':'GO','Maranhão':'MA',
-  'Mato Grosso':'MT','Mato Grosso do Sul':'MS','Minas Gerais':'MG','Pará':'PA',
-  'Paraíba':'PB','Paraná':'PR','Pernambuco':'PE','Piauí':'PI','Rio de Janeiro':'RJ',
-  'Rio Grande do Norte':'RN','Rio Grande do Sul':'RS','Rondônia':'RO','Roraima':'RR',
-  'Santa Catarina':'SC','São Paulo':'SP','Sergipe':'SE','Tocantins':'TO'
-};
-
-const C = {
-  red:'#E61A27', redDeep:'#B80F1B', redDark:'#7A0A12', redBright:'#FF2738',
-  bg:'#F4F1ED', ink:'#0A0908', inkSoft:'#4A4744', inkFaded:'#8F8B86',
-  card:'#FFFFFF', border:'#E8E0D6', borderDark:'#C9BDAE', white:'#FFFFFF', black:'#080606',
-  green:'#16A34A',
-};
+const STATE_MAP = {'Acre':'AC','Alagoas':'AL','Amapá':'AP','Amazonas':'AM','Bahia':'BA','Ceará':'CE','Distrito Federal':'DF','Espírito Santo':'ES','Goiás':'GO','Maranhão':'MA','Mato Grosso':'MT','Mato Grosso do Sul':'MS','Minas Gerais':'MG','Pará':'PA','Paraíba':'PB','Paraná':'PR','Pernambuco':'PE','Piauí':'PI','Rio de Janeiro':'RJ','Rio Grande do Norte':'RN','Rio Grande do Sul':'RS','Rondônia':'RO','Roraima':'RR','Santa Catarina':'SC','São Paulo':'SP','Sergipe':'SE','Tocantins':'TO'};
 
 const MONTH_NAMES = ['Jan','Fev','Mar','Abr','Mai','Jun','Jul','Ago','Set','Out','Nov','Dez'];
+const MONTH_FULL = ['Janeiro','Fevereiro','Março','Abril','Maio','Junho','Julho','Agosto','Setembro','Outubro','Novembro','Dezembro'];
 
-function formatBrazilianAddress(data) {
+// ═══════════════════════════════════════════════════════════════════════════
+// HELPERS
+// ═══════════════════════════════════════════════════════════════════════════
+function distMeters(lat1, lon1, lat2, lon2) {
+  const R = 6371000;
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLon = (lon2 - lon1) * Math.PI / 180;
+  const a = Math.sin(dLat/2)**2 + Math.cos(lat1*Math.PI/180)*Math.cos(lat2*Math.PI/180)*Math.sin(dLon/2)**2;
+  return 2 * R * Math.asin(Math.sqrt(a));
+}
+function haversineKm(lat1, lon1, lat2, lon2) { return distMeters(lat1,lon1,lat2,lon2) / 1000; }
+
+function formatBrazilianAddress(data, overrideNumber, isApprox) {
   const a = data.address || {};
   const street = a.road || a.pedestrian || a.path || '';
-  const number = a.house_number || '';
+  const number = overrideNumber || a.house_number || '';
   const neighborhood = a.suburb || a.neighbourhood || a.quarter || a.city_district || '';
   const city = a.city || a.town || a.village || a.municipality || '';
   const stateAbbr = STATE_MAP[a.state || ''] || a.state || '';
   const postcode = a.postcode || '';
   let parts = [];
   if (street) {
-    let s = number ? `${street}, ${number}` : street;
+    let nl = number ? (isApprox ? `~${number}` : `${number}`) : '';
+    let s = nl ? `${street}, ${nl}` : street;
     if (neighborhood) s += ` - ${neighborhood}`;
     parts.push(s);
   } else if (neighborhood) parts.push(neighborhood);
@@ -55,115 +59,289 @@ function formatBrazilianAddress(data) {
   return parts.length > 0 ? parts.join(', ') : (data.display_name || '');
 }
 
-function haversineKm(lat1, lon1, lat2, lon2) {
-  const R = 6371;
-  const dLat = (lat2 - lat1) * Math.PI / 180;
-  const dLon = (lon2 - lon1) * Math.PI / 180;
-  const a = Math.sin(dLat/2)**2 + Math.cos(lat1*Math.PI/180)*Math.cos(lat2*Math.PI/180)*Math.sin(dLon/2)**2;
-  return 2 * R * Math.asin(Math.sqrt(a));
+async function reverseLookup(lat, lng, zoom = 19) {
+  const url = `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lng}&format=json&accept-language=pt-BR&addressdetails=1&zoom=${zoom}`;
+  const r = await fetch(url);
+  if (!r.ok) throw new Error('Erro no serviço de endereços');
+  return await r.json();
 }
 
-const formatBRL = (n) => 'R$ ' + n.toFixed(2).replace('.', ',');
-
-const STORAGE_KEY = 'km_trips_v1';
-function loadTrips() {
+async function searchNearbyForNumber(lat, lng, road) {
+  if (!road) return null;
+  const delta = 0.0015;
+  const viewbox = `${lng-delta},${lat-delta},${lng+delta},${lat+delta}`;
+  const q = encodeURIComponent(road);
+  const url = `https://nominatim.openstreetmap.org/search?q=${q}&format=json&addressdetails=1&accept-language=pt-BR&limit=20&bounded=1&viewbox=${viewbox}`;
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (raw) return JSON.parse(raw);
-  } catch (_) {}
-  return null;
-}
-function saveTripsToStorage(trips) {
-  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(trips)); } catch (_) {}
+    const r = await fetch(url);
+    if (!r.ok) return null;
+    const list = await r.json();
+    if (!Array.isArray(list) || list.length === 0) return null;
+    const candidates = list
+      .filter(item => item.address?.house_number && (item.address?.road === road || item.address?.pedestrian === road))
+      .map(item => ({ number: item.address.house_number, d: distMeters(lat, lng, parseFloat(item.lat), parseFloat(item.lon)) }))
+      .sort((a, b) => a.d - b.d);
+    return candidates[0]?.number || null;
+  } catch { return null; }
 }
 
-// ── MINI MAP ──────────────────────────────────────────────────────────────────
-function MiniMap({ geometry, fM }) {
+async function getAddressWithNumber(lat, lng) {
+  const data = await reverseLookup(lat, lng, 19);
+  const direct = data?.address?.house_number;
+  if (direct) return { data, number: direct, isApprox: false };
+  const road = data?.address?.road || data?.address?.pedestrian;
+  const nearby = await searchNearbyForNumber(lat, lng, road);
+  if (nearby) return { data, number: nearby, isApprox: true };
+  return { data, number: null, isApprox: false };
+}
+
+// BRL formatter with parts (for typographic split)
+const brlFmt = new Intl.NumberFormat('pt-BR', { style:'currency', currency:'BRL', minimumFractionDigits:2, maximumFractionDigits:2 });
+const numFmt = new Intl.NumberFormat('pt-BR', { minimumFractionDigits:2, maximumFractionDigits:2 });
+
+// localStorage
+const TRIPS_KEY = 'km_trips_v1';
+const THEME_KEY = 'coca_theme';
+const SOUND_KEY = 'coca_sound';
+const HAPTIC_KEY = 'coca_haptic';
+const loadTrips = () => { try { const r = localStorage.getItem(TRIPS_KEY); return r ? JSON.parse(r) : null; } catch { return null; } };
+const saveTrips = (t) => { try { localStorage.setItem(TRIPS_KEY, JSON.stringify(t)); } catch {} };
+
+// ═══════════════════════════════════════════════════════════════════════════
+// FEEDBACK (sound + haptic)
+// ═══════════════════════════════════════════════════════════════════════════
+let audioCtx;
+function getAudioCtx() {
+  if (typeof window === 'undefined') return null;
+  if (!audioCtx) {
+    try { audioCtx = new (window.AudioContext || window.webkitAudioContext)(); } catch { return null; }
+  }
+  return audioCtx;
+}
+
+function playTone(freq, duration = 0.04, type = 'sine', volume = 0.15) {
+  const ctx = getAudioCtx();
+  if (!ctx) return;
+  const osc = ctx.createOscillator();
+  const gain = ctx.createGain();
+  osc.type = type;
+  osc.frequency.value = freq;
+  gain.gain.setValueAtTime(0, ctx.currentTime);
+  gain.gain.linearRampToValueAtTime(volume, ctx.currentTime + 0.005);
+  gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + duration);
+  osc.connect(gain);
+  gain.connect(ctx.destination);
+  osc.start();
+  osc.stop(ctx.currentTime + duration);
+}
+
+const SOUND_PRESETS = {
+  tap:        () => playTone(1000, 0.025, 'sine', 0.10),
+  success:    () => { playTone(660, 0.06, 'sine', 0.12); setTimeout(()=>playTone(880, 0.10, 'sine', 0.14), 60); },
+  error:      () => { playTone(400, 0.08, 'sawtooth', 0.10); setTimeout(()=>playTone(280, 0.12, 'sawtooth', 0.10), 80); },
+  swoosh:     () => playTone(800, 0.05, 'triangle', 0.08),
+};
+const HAPTIC_PRESETS = { tap: 10, success: [15, 50, 15], error: [50, 30, 50, 30, 50], swoosh: 8 };
+
+function useFeedback() {
+  return useCallback((key) => {
+    if (typeof window === 'undefined') return;
+    if (matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+    if (localStorage.getItem(SOUND_KEY) !== 'off') {
+      try { SOUND_PRESETS[key]?.(); } catch {}
+    }
+    if (localStorage.getItem(HAPTIC_KEY) !== 'off' && 'vibrate' in navigator) {
+      try { navigator.vibrate(HAPTIC_PRESETS[key] || 10); } catch {}
+    }
+  }, []);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// THEME MANAGEMENT (anti-FOUC handled in index.html via inline script)
+// ═══════════════════════════════════════════════════════════════════════════
+function getInitialTheme() {
+  if (typeof window === 'undefined') return 'light';
+  const stored = localStorage.getItem(THEME_KEY);
+  if (stored === 'dark' || stored === 'light') return stored;
+  return matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+}
+
+function setTheme(next) {
+  document.documentElement.setAttribute('data-theme', next);
+  document.documentElement.style.colorScheme = next;
+  localStorage.setItem(THEME_KEY, next);
+  // Update theme-color meta
+  const metaLight = document.querySelector('meta[name="theme-color"][media*="light"]');
+  const metaDark  = document.querySelector('meta[name="theme-color"][media*="dark"]');
+  if (metaLight) metaLight.setAttribute('content', next === 'dark' ? '#0A0A0A' : '#FAFAFA');
+  if (metaDark)  metaDark.setAttribute('content', next === 'dark' ? '#0A0A0A' : '#FAFAFA');
+}
+
+function toggleTheme(current) {
+  const next = current === 'dark' ? 'light' : 'dark';
+  if (typeof document !== 'undefined' && document.startViewTransition) {
+    document.startViewTransition(() => setTheme(next));
+  } else {
+    setTheme(next);
+  }
+  return next;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// MINI MAP (brutalist SVG)
+// ═══════════════════════════════════════════════════════════════════════════
+function MiniMap({ geometry }) {
   if (!geometry || geometry.length < 2) {
     return (
-      <div style={{
-        width: '100%', height: 88, borderRadius: 12,
-        background: `repeating-linear-gradient(45deg, ${C.bg}, ${C.bg} 8px, #ECE5DA 8px, #ECE5DA 16px)`,
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
-        border: `1px dashed ${C.borderDark}`, marginTop: 10
-      }}>
-        <span style={{ fontFamily: fM, fontSize: 10, color: C.inkFaded, letterSpacing: '0.14em', textTransform: 'uppercase' }}>
-          ◊ rota não disponível ◊
-        </span>
+      <div className="km-mini-empty">
+        <span>◊ rota indisponível ◊</span>
       </div>
     );
   }
-
-  let minLng = Infinity, maxLng = -Infinity, minLat = Infinity, maxLat = -Infinity;
+  let minLng=Infinity, maxLng=-Infinity, minLat=Infinity, maxLat=-Infinity;
   for (const [lng, lat] of geometry) {
-    if (lng < minLng) minLng = lng;
-    if (lng > maxLng) maxLng = lng;
-    if (lat < minLat) minLat = lat;
-    if (lat > maxLat) maxLat = lat;
+    if (lng < minLng) minLng = lng; if (lng > maxLng) maxLng = lng;
+    if (lat < minLat) minLat = lat; if (lat > maxLat) maxLat = lat;
   }
   const padX = ((maxLng - minLng) || 0.001) * 0.15;
   const padY = ((maxLat - minLat) || 0.001) * 0.20;
-  minLng -= padX; maxLng += padX;
-  minLat -= padY; maxLat += padY;
-
-  const W = 320, H = 88;
+  minLng -= padX; maxLng += padX; minLat -= padY; maxLat += padY;
+  const W=320, H=100;
   const dataAspect = (maxLng - minLng) / (maxLat - minLat);
   const viewAspect = W / H;
   if (dataAspect > viewAspect) {
-    const newLatRange = (maxLng - minLng) / viewAspect;
-    const midLat = (minLat + maxLat) / 2;
-    minLat = midLat - newLatRange / 2;
-    maxLat = midLat + newLatRange / 2;
+    const r = (maxLng - minLng) / viewAspect;
+    const m = (minLat + maxLat) / 2; minLat = m - r/2; maxLat = m + r/2;
   } else {
-    const newLngRange = (maxLat - minLat) * viewAspect;
-    const midLng = (minLng + maxLng) / 2;
-    minLng = midLng - newLngRange / 2;
-    maxLng = midLng + newLngRange / 2;
+    const r = (maxLat - minLat) * viewAspect;
+    const m = (minLng + maxLng) / 2; minLng = m - r/2; maxLng = m + r/2;
   }
-
-  const project = ([lng, lat]) => {
-    const x = ((lng - minLng) / (maxLng - minLng)) * W;
-    const y = H - ((lat - minLat) / (maxLat - minLat)) * H;
-    return [x, y];
-  };
-
+  const project = ([lng, lat]) => [((lng - minLng) / (maxLng - minLng)) * W, H - ((lat - minLat) / (maxLat - minLat)) * H];
   const points = geometry.map(project);
   const pathD = points.map(([x, y], i) => `${i === 0 ? 'M' : 'L'}${x.toFixed(1)},${y.toFixed(1)}`).join(' ');
   const [sx, sy] = points[0];
   const [ex, ey] = points[points.length - 1];
-
   return (
-    <div style={{ marginTop: 10, position: 'relative', borderRadius: 12, overflow: 'hidden', border: `1px solid ${C.border}` }}>
-      <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="xMidYMid meet" style={{
-        width: '100%', height: 88,
-        background: `linear-gradient(135deg, #F8F4ED 0%, #EDE5D8 100%)`,
-        display: 'block'
-      }}>
-        {/* Subtle grid */}
+    <div className="km-minimap">
+      <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="xMidYMid slice">
         <defs>
-          <pattern id="mapgrid" width="20" height="20" patternUnits="userSpaceOnUse">
-            <path d="M 20 0 L 0 0 0 20" fill="none" stroke="rgba(10,9,8,0.05)" strokeWidth="0.5" />
+          <pattern id="mapgrid" width="16" height="16" patternUnits="userSpaceOnUse">
+            <path d="M 16 0 L 0 0 0 16" fill="none" stroke="var(--map-grid)" strokeWidth="0.5" />
           </pattern>
+          <linearGradient id="routegrad" x1="0%" y1="0%" x2="100%" y2="0%">
+            <stop offset="0%" stopColor="var(--coca-red)" />
+            <stop offset="100%" stopColor="var(--text-primary)" />
+          </linearGradient>
         </defs>
         <rect width={W} height={H} fill="url(#mapgrid)" />
-
-        {/* Route shadow + line */}
-        <path d={pathD} fill="none" stroke="rgba(230,26,39,0.25)" strokeWidth="6" strokeLinecap="round" strokeLinejoin="round" />
-        <path d={pathD} fill="none" stroke={C.red} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
-
-        {/* Start marker */}
-        <circle cx={sx} cy={sy} r="6" fill="white" stroke={C.red} strokeWidth="2.5" />
-        <circle cx={sx} cy={sy} r="2.5" fill={C.red} />
-
-        {/* End marker (flag) */}
-        <rect x={ex - 5} y={ey - 5} width="10" height="10" fill={C.black} stroke="white" strokeWidth="2" rx="1.5" />
+        <path d={pathD} stroke="var(--coca-red-glow)" strokeWidth="6" fill="none" strokeLinecap="round" strokeLinejoin="round" />
+        <path d={pathD} stroke="url(#routegrad)" strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round" className="km-route-dash" />
+        <circle cx={sx} cy={sy} r="5" fill="var(--bg-base)" stroke="var(--coca-red)" strokeWidth="2" />
+        <circle cx={sx} cy={sy} r="2" fill="var(--coca-red)" />
+        <rect x={ex - 4} y={ey - 4} width="8" height="8" fill="var(--text-primary)" stroke="var(--bg-base)" strokeWidth="1.5" />
       </svg>
+      <div className="km-minimap-label">
+        <span>◊ ROTA</span>
+        <span>{geometry.length} pts</span>
+      </div>
     </div>
   );
 }
 
-// ── DASHBOARD ─────────────────────────────────────────────────────────────────
-function Dashboard({ trips, fD, fM, fB }) {
+// ═══════════════════════════════════════════════════════════════════════════
+// ACTIVITY RINGS (Apple-style)
+// ═══════════════════════════════════════════════════════════════════════════
+function ActivityRings({ kmProgress, moneyProgress, daysProgress }) {
+  const rings = [
+    { progress: kmProgress, color: 'var(--coca-red)', radius: 70, label: 'KM' },
+    { progress: moneyProgress, color: 'var(--text-primary)', radius: 54, label: 'R$' },
+    { progress: daysProgress, color: 'var(--text-secondary)', radius: 38, label: 'DIAS' },
+  ];
+  const stroke = 11;
+  return (
+    <div className="km-rings">
+      <svg viewBox="0 0 200 200" width="180" height="180">
+        {rings.map((r, i) => {
+          const c = 2 * Math.PI * r.radius;
+          return (
+            <g key={i}>
+              <circle r={r.radius} cx="100" cy="100" fill="none" stroke="var(--border-subtle)" strokeWidth={stroke} />
+              <circle
+                r={r.radius} cx="100" cy="100" fill="none"
+                stroke={r.color} strokeWidth={stroke}
+                strokeDasharray={c}
+                strokeDashoffset={c * (1 - Math.min(r.progress, 1))}
+                strokeLinecap="round"
+                transform="rotate(-90 100 100)"
+                style={{ transition: 'stroke-dashoffset 1.2s cubic-bezier(.32,.72,0,1)' }}
+              />
+            </g>
+          );
+        })}
+      </svg>
+      <div className="km-rings-legend">
+        {rings.map((r, i) => (
+          <div key={i} className="km-rings-legend-row">
+            <span className="km-rings-dot" style={{ background: r.color }} />
+            <span className="km-rings-legend-label">{r.label}</span>
+            <span className="km-rings-legend-pct">{Math.round(r.progress * 100)}%</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// SPARKLINE
+// ═══════════════════════════════════════════════════════════════════════════
+function Sparkline({ values, height = 36 }) {
+  if (!values || values.length === 0) return null;
+  const W = 280, H = height;
+  const max = Math.max(...values, 0.01);
+  const step = W / Math.max(values.length - 1, 1);
+  const points = values.map((v, i) => [i * step, H - (v / max) * (H - 4) - 2]);
+  const pathD = points.map(([x, y], i) => `${i === 0 ? 'M' : 'L'}${x.toFixed(1)},${y.toFixed(1)}`).join(' ');
+  const areaD = pathD + ` L${W},${H} L0,${H} Z`;
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} className="km-sparkline" preserveAspectRatio="none">
+      <defs>
+        <linearGradient id="sparkfill" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor="var(--coca-red)" stopOpacity="0.3" />
+          <stop offset="100%" stopColor="var(--coca-red)" stopOpacity="0" />
+        </linearGradient>
+      </defs>
+      <path d={areaD} fill="url(#sparkfill)" />
+      <path d={pathD} fill="none" stroke="var(--coca-red)" strokeWidth="1.5" strokeLinejoin="round" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// BIG NUMBER (R$ split — Stripe/Wise style)
+// ═══════════════════════════════════════════════════════════════════════════
+function BigCurrency({ value, size = 'xl' }) {
+  const parts = brlFmt.formatToParts(value);
+  let symbol = '', integer = '', decimal = '';
+  for (const p of parts) {
+    if (p.type === 'currency') symbol = p.value;
+    else if (p.type === 'integer' || p.type === 'group') integer += p.value;
+    else if (p.type === 'decimal') decimal += p.value;
+    else if (p.type === 'fraction') decimal += p.value;
+  }
+  return (
+    <span className={`km-big-currency km-big-currency--${size}`}>
+      <span className="km-big-currency-symbol">{symbol}</span>
+      <span className="km-big-currency-int">{integer}</span>
+      <span className="km-big-currency-dec">{decimal}</span>
+    </span>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// DASHBOARD
+// ═══════════════════════════════════════════════════════════════════════════
+function Dashboard({ trips }) {
   const stats = useMemo(() => {
     const totalKm = trips.reduce((s, t) => s + (t.km || 0), 0);
     const measured = trips.filter(t => t.km != null);
@@ -184,11 +362,12 @@ function Dashboard({ trips, fD, fM, fB }) {
     for (const t of measured) {
       const [d, m, y] = t.date.split('/');
       const key = `${m}/${y}`;
-      if (!byMonth[key]) byMonth[key] = { km: 0, count: 0 };
+      if (!byMonth[key]) byMonth[key] = { km: 0, count: 0, days: new Set() };
       byMonth[key].km += t.km;
       byMonth[key].count += 1;
+      byMonth[key].days.add(t.date);
     }
-    const months = Object.entries(byMonth).map(([key, d]) => ({ key, ...d }))
+    const months = Object.entries(byMonth).map(([key, d]) => ({ key, ...d, daysCount: d.days.size }))
       .sort((a, b) => {
         const [ma, ya] = a.key.split('/');
         const [mb, yb] = b.key.split('/');
@@ -196,200 +375,204 @@ function Dashboard({ trips, fD, fM, fB }) {
       });
 
     const maxDayKm = Math.max(...days.map(d => d.km), 0.01);
+    const avgPerDay = days.length > 0 ? totalKm / days.length : 0;
+    const bestDay = days.reduce((a, b) => (a?.km || 0) > b.km ? a : b, null);
 
-    return { totalKm, measuredCount: measured.length, days, months, maxDayKm };
+    // Current month projection
+    const now = new Date();
+    const currentKey = `${String(now.getMonth()+1).padStart(2,'0')}/${now.getFullYear()}`;
+    const currentMonth = byMonth[currentKey];
+    const daysInMonth = new Date(now.getFullYear(), now.getMonth()+1, 0).getDate();
+    const today = now.getDate();
+    let projection = null;
+    if (currentMonth && today > 0) {
+      const projKm = (currentMonth.km / Math.min(today, daysInMonth)) * daysInMonth;
+      projection = { km: projKm, money: projKm * RATE };
+    }
+
+    // Last 14 days for sparkline (real or zero)
+    const last14 = [];
+    for (let i = 13; i >= 0; i--) {
+      const d = new Date(now);
+      d.setDate(now.getDate() - i);
+      const key = `${String(d.getDate()).padStart(2,'0')}/${String(d.getMonth()+1).padStart(2,'0')}/${d.getFullYear()}`;
+      last14.push(byDay[key]?.km || 0);
+    }
+
+    return { totalKm, measuredCount: measured.length, days, months, maxDayKm, avgPerDay, bestDay, projection, last14, currentMonth };
   }, [trips]);
 
   const totalEarning = stats.totalKm * RATE;
 
-  const cardBase = {
-    backgroundColor: C.card, borderRadius: 22, padding: 22, marginBottom: 14,
-    boxShadow: '0 2px 6px rgba(10,9,8,0.04), 0 16px 40px rgba(10,9,8,0.06)',
-    border: `1px solid ${C.border}`
-  };
+  return (
+    <div className="km-dash km-fade-up">
+      {/* HERO METRIC */}
+      <section className="km-card km-card--hero">
+        <div className="km-aurora" />
+        <header className="km-card-head">
+          <span className="km-mono km-mono-label">[ TOTAL · ALL-TIME ]</span>
+          <span className="km-mono km-mono-label">{String(trips.length).padStart(3,'0')}/REC</span>
+        </header>
+        <div className="km-hero-amount">
+          <BigCurrency value={totalEarning} size="xl" />
+        </div>
+        <div className="km-hero-meta">
+          <span className="km-mono">{numFmt.format(stats.totalKm)} KM</span>
+          <span className="km-divider-vert" />
+          <span className="km-mono km-muted">× R$ 1,14/KM</span>
+        </div>
+        {stats.last14.some(v => v > 0) && (
+          <div className="km-hero-spark">
+            <Sparkline values={stats.last14} height={32} />
+            <span className="km-mono km-mono-tiny">14d</span>
+          </div>
+        )}
+      </section>
 
-  const sectionHeader = (icon, title, badge) => (
-    <div style={{ display:'flex', alignItems:'center', gap:12, marginBottom:16 }}>
-      <div style={{ width:4, height:24, borderRadius:2, background:`linear-gradient(180deg, ${C.red}, ${C.redDeep})` }} />
-      <div style={{ display:'flex', alignItems:'center', gap:8 }}>
-        {icon}
-        <h3 style={{ fontFamily:fD, fontSize:22, color:C.ink, letterSpacing:'-0.03em', fontWeight:700, margin:0 }}>{title}</h3>
-      </div>
-      {badge && <span style={{ fontFamily:fM, fontSize:10, color:C.white, background:C.black, padding:'3px 8px', borderRadius:6, letterSpacing:'0.06em' }}>{badge}</span>}
+      {/* PROJECTION + STATS GRID */}
+      {stats.projection && (
+        <section className="km-card km-card--projection">
+          <div className="km-row-tight">
+            <span className="km-mono km-mono-label">◊ PROJEÇÃO · {MONTH_FULL[parseInt(stats.projection ? stats.currentMonth ? Object.keys({})[0] : '01' : '01')-1]?.toUpperCase() || ''}{(() => { const n = new Date(); return `${MONTH_FULL[n.getMonth()].toUpperCase()} ${n.getFullYear()}`; })()}</span>
+          </div>
+          <div className="km-projection-content">
+            <div>
+              <BigCurrency value={stats.projection.money} size="md" />
+              <div className="km-mono km-muted km-mono-tiny km-mt-1">{numFmt.format(stats.projection.km)} KM ESTIMADOS</div>
+            </div>
+          </div>
+        </section>
+      )}
+
+      {/* RINGS */}
+      <section className="km-card km-card--rings">
+        <header className="km-card-head">
+          <span className="km-mono km-mono-label">◊ ATIVIDADE · MÊS</span>
+        </header>
+        <ActivityRings
+          kmProgress={Math.min((stats.currentMonth?.km || 0) / 1500, 1)}
+          moneyProgress={Math.min((stats.currentMonth?.km || 0) * RATE / 2000, 1)}
+          daysProgress={Math.min((stats.currentMonth?.daysCount || 0) / 22, 1)}
+        />
+      </section>
+
+      {/* STATS GRID */}
+      <section className="km-stats-grid">
+        <div className="km-stat-tile">
+          <span className="km-mono km-mono-label">[ MÉDIA / DIA ]</span>
+          <span className="km-stat-num">{numFmt.format(stats.avgPerDay)}</span>
+          <span className="km-mono km-muted km-mono-tiny">KM</span>
+        </div>
+        <div className="km-stat-tile">
+          <span className="km-mono km-mono-label">[ MELHOR DIA ]</span>
+          <span className="km-stat-num">{stats.bestDay ? numFmt.format(stats.bestDay.km) : '0'}</span>
+          <span className="km-mono km-muted km-mono-tiny">{stats.bestDay?.date || '—'}</span>
+        </div>
+      </section>
+
+      {/* PULL QUOTE EDITORIAL (1× per screen) */}
+      {stats.bestDay && stats.totalKm > 0 && (
+        <blockquote className="km-pullquote">
+          <p>
+            <span className="km-serif km-italic">Maior consumo da rota em </span>
+            <span className="km-mono km-pullquote-data">{stats.bestDay.date.slice(3)}</span>
+            <span className="km-serif km-italic">.</span>
+          </p>
+          <cite className="km-mono km-mono-tiny km-muted">— REGISTRO INTERNO · DRIVE LOG</cite>
+        </blockquote>
+      )}
+
+      {/* BY DAY */}
+      <section className="km-card">
+        <header className="km-card-head km-card-head--bordered">
+          <div className="km-row-tight">
+            <Calendar size={14} strokeWidth={2.4} />
+            <span className="km-mono km-mono-label">POR DIA</span>
+          </div>
+          <span className="km-mono km-mono-label">{String(stats.days.length).padStart(2,'0')}</span>
+        </header>
+        {stats.days.length === 0 ? (
+          <p className="km-empty">Sem dados ainda.</p>
+        ) : (
+          <ul className="km-rows">
+            {stats.days.map((d) => {
+              const earning = d.km * RATE;
+              const pct = (d.km / stats.maxDayKm) * 100;
+              return (
+                <li key={d.date} className="km-row">
+                  <div className="km-row-main">
+                    <div>
+                      <div className="km-mono km-row-date">{d.date}</div>
+                      <div className="km-mono km-mono-tiny km-muted">{d.count} {d.count === 1 ? 'VIAGEM' : 'VIAGENS'}</div>
+                    </div>
+                    <div className="km-row-right">
+                      <div className="km-mono km-row-km">{numFmt.format(d.km)} KM</div>
+                      <div className="km-row-money">{brlFmt.format(earning)}</div>
+                    </div>
+                  </div>
+                  <div className="km-bar"><div className="km-bar-fill" style={{ width: `${pct}%` }} /></div>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </section>
+
+      {/* BY MONTH */}
+      <section className="km-card">
+        <header className="km-card-head km-card-head--bordered">
+          <div className="km-row-tight">
+            <TrendingUp size={14} strokeWidth={2.4} />
+            <span className="km-mono km-mono-label">POR MÊS</span>
+          </div>
+          <span className="km-mono km-mono-label">{String(stats.months.length).padStart(2,'0')}</span>
+        </header>
+        {stats.months.length === 0 ? (
+          <p className="km-empty">Sem dados ainda.</p>
+        ) : (
+          <ul className="km-month-rows">
+            {stats.months.map((m) => {
+              const [mm, yy] = m.key.split('/');
+              return (
+                <li key={m.key} className="km-month-row">
+                  <div>
+                    <div className="km-month-title">{MONTH_NAMES[parseInt(mm)-1]} <span className="km-mono km-muted">·{yy}</span></div>
+                    <div className="km-mono km-mono-tiny km-muted">{m.count} VIAGENS · {numFmt.format(m.km)} KM · {m.daysCount} DIAS</div>
+                  </div>
+                  <div className="km-month-money">{brlFmt.format(m.km * RATE)}</div>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </section>
     </div>
   );
+}
 
+// ═══════════════════════════════════════════════════════════════════════════
+// SPLASH SCREEN
+// ═══════════════════════════════════════════════════════════════════════════
+function Splash({ exiting }) {
   return (
-    <div className="km-fade">
-      {/* MAIN EARNING CARD */}
-      <div style={{
-        background: `linear-gradient(135deg, ${C.black} 0%, #1A1414 100%)`,
-        borderRadius: 24, padding: '24px 22px', marginBottom: 14,
-        position: 'relative', overflow: 'hidden',
-        border: `1px solid rgba(230,26,39,0.3)`,
-        boxShadow: '0 18px 44px rgba(10,9,8,0.18)'
-      }}>
-        {/* Glow */}
-        <div style={{
-          position: 'absolute', top: -50, right: -30, width: 180, height: 180,
-          borderRadius: '50%', background: `radial-gradient(circle, rgba(230,26,39,0.45), transparent 70%)`,
-          pointerEvents: 'none'
-        }} />
-        <div style={{
-          position: 'absolute', inset: 0, opacity: 0.08,
-          backgroundImage: 'linear-gradient(rgba(255,255,255,0.4) 1px, transparent 1px)',
-          backgroundSize: '100% 14px', pointerEvents: 'none'
-        }} />
-
-        <div style={{ position:'relative' }}>
-          <div style={{
-            display:'flex', alignItems:'center', gap:8,
-            fontFamily:fM, fontSize:10, letterSpacing:'0.26em',
-            color:'rgba(255,255,255,0.6)', textTransform:'uppercase', fontWeight:500
-          }}>
-            <DollarSign size={12} strokeWidth={2.4} />
-            Valor a receber
-          </div>
-          <div style={{ display:'flex', alignItems:'baseline', gap:8, marginTop:10 }}>
-            <span style={{ fontFamily:fD, fontSize:22, color:'rgba(255,255,255,0.7)', fontWeight:700 }}>R$</span>
-            <span style={{
-              fontFamily:fD, fontSize:60, lineHeight:0.9, color:C.white,
-              fontWeight:800, letterSpacing:'-0.05em',
-              textShadow:'0 0 28px rgba(230,26,39,0.5)'
-            }}>
-              {totalEarning.toFixed(2).replace('.',',')}
-            </span>
-          </div>
-          <div style={{ marginTop:14, display:'flex', alignItems:'center', gap:10, flexWrap:'wrap' }}>
-            <span style={{
-              fontFamily:fM, fontSize:11, color:'rgba(255,255,255,0.7)',
-              background:'rgba(255,255,255,0.08)', padding:'5px 10px', borderRadius:100,
-              border:'1px solid rgba(255,255,255,0.12)', letterSpacing:'0.06em'
-            }}>
-              {stats.totalKm.toFixed(2)} km
-            </span>
-            <span style={{
-              fontFamily:fM, fontSize:11, color:'rgba(255,255,255,0.5)', letterSpacing:'0.06em'
-            }}>
-              × R$ 1,14/km
-            </span>
-          </div>
-          <div style={{
-            marginTop:10, fontFamily:fM, fontSize:10, color:'rgba(255,255,255,0.4)',
-            letterSpacing:'0.08em'
-          }}>
-            {stats.measuredCount} de {trips.length} viagens medidas
-          </div>
-        </div>
-      </div>
-
-      {/* POR DIA */}
-      <div style={cardBase}>
-        {sectionHeader(
-          <Calendar size={18} color={C.ink} strokeWidth={2.2} />,
-          'Por dia',
-          String(stats.days.length).padStart(2,'0')
-        )}
-
-        {stats.days.length === 0 ? (
-          <p style={{ fontSize:12.5, color:C.inkFaded, fontStyle:'italic', textAlign:'center', padding:'12px 0', fontFamily:fD, margin:0 }}>
-            Sem viagens medidas ainda.
-          </p>
-        ) : (
-          <div>
-            {stats.days.map((d, idx) => {
-              const earning = d.km * RATE;
-              const barPct = (d.km / stats.maxDayKm) * 100;
-              return (
-                <div key={d.date} style={{
-                  paddingTop: idx === 0 ? 0 : 14,
-                  paddingBottom: 4,
-                  borderTop: idx === 0 ? 'none' : `1px solid ${C.border}`
-                }}>
-                  <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom:8 }}>
-                    <div>
-                      <div style={{ fontFamily:fM, fontSize:12, fontWeight:700, color:C.ink, letterSpacing:'0.1em' }}>
-                        {d.date}
-                      </div>
-                      <div style={{ fontFamily:fM, fontSize:10, color:C.inkFaded, marginTop:3, letterSpacing:'0.06em' }}>
-                        {d.count} {d.count === 1 ? 'viagem' : 'viagens'}
-                      </div>
-                    </div>
-                    <div style={{ textAlign:'right' }}>
-                      <div style={{ fontFamily:fM, fontSize:14, fontWeight:700, color:C.ink, letterSpacing:'-0.01em' }}>
-                        {d.km.toFixed(2)} km
-                      </div>
-                      <div style={{ fontFamily:fD, fontSize:13, fontWeight:700, color:C.red, marginTop:2, fontStyle:'italic' }}>
-                        {formatBRL(earning)}
-                      </div>
-                    </div>
-                  </div>
-                  <div style={{ height:5, background:C.bg, borderRadius:3, overflow:'hidden' }}>
-                    <div style={{
-                      width:`${barPct}%`, height:'100%',
-                      background:`linear-gradient(90deg, ${C.red}, ${C.redDeep})`,
-                      borderRadius:3, transition:'width 0.4s ease'
-                    }} />
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        )}
-      </div>
-
-      {/* POR MÊS */}
-      <div style={{ ...cardBase, marginBottom: 0 }}>
-        {sectionHeader(
-          <TrendingUp size={18} color={C.ink} strokeWidth={2.2} />,
-          'Por mês',
-          String(stats.months.length).padStart(2,'0')
-        )}
-
-        {stats.months.length === 0 ? (
-          <p style={{ fontSize:12.5, color:C.inkFaded, fontStyle:'italic', textAlign:'center', padding:'12px 0', fontFamily:fD, margin:0 }}>
-            Sem dados mensais ainda.
-          </p>
-        ) : (
-          <div>
-            {stats.months.map((m, idx) => {
-              const [mm, yy] = m.key.split('/');
-              const label = `${MONTH_NAMES[parseInt(mm)-1]} · ${yy}`;
-              const earning = m.km * RATE;
-              return (
-                <div key={m.key} style={{
-                  paddingTop: idx === 0 ? 0 : 14,
-                  paddingBottom: idx === stats.months.length - 1 ? 0 : 0,
-                  borderTop: idx === 0 ? 'none' : `1px solid ${C.border}`,
-                  display:'flex', alignItems:'center', justifyContent:'space-between'
-                }}>
-                  <div>
-                    <div style={{ fontFamily:fD, fontSize:18, fontWeight:700, color:C.ink, letterSpacing:'-0.02em' }}>
-                      {label}
-                    </div>
-                    <div style={{ fontFamily:fM, fontSize:10.5, color:C.inkFaded, marginTop:3, letterSpacing:'0.08em' }}>
-                      {m.count} {m.count === 1 ? 'viagem' : 'viagens'} · {m.km.toFixed(2)} km
-                    </div>
-                  </div>
-                  <div style={{
-                    fontFamily:fD, fontSize:18, fontWeight:700, color:C.white,
-                    background:`linear-gradient(135deg, ${C.red}, ${C.redDeep})`,
-                    padding:'8px 14px', borderRadius:100, letterSpacing:'-0.01em',
-                    boxShadow:'0 6px 16px rgba(230,26,39,0.28)', fontStyle:'italic'
-                  }}>
-                    {formatBRL(earning)}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        )}
+    <div className={`km-splash ${exiting ? 'km-splash--exit' : ''}`}>
+      <div className="km-splash-grid" />
+      <div className="km-splash-content">
+        <div className="km-splash-mono">[ INIT · {APP_VERSION} ]</div>
+        <h1 className="km-splash-title">
+          <span>DRIVE</span>
+          <span className="km-splash-italic">LOG</span>
+        </h1>
+        <div className="km-splash-bar"><div className="km-splash-bar-fill" /></div>
+        <div className="km-splash-mono km-splash-mono--small">SYS · BOOT · OK</div>
       </div>
     </div>
   );
 }
 
-// ── MAIN APP ──────────────────────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════
+// MAIN APP
+// ═══════════════════════════════════════════════════════════════════════════
 export default function KmTracker() {
   const [origin, setOrigin] = useState({ address: '', lat: null, lng: null });
   const [destination, setDestination] = useState({ address: '', lat: null, lng: null });
@@ -400,15 +583,30 @@ export default function KmTracker() {
   const [loading, setLoading] = useState({ origin: false, destination: false, distance: false });
   const [error, setError] = useState(null);
   const [success, setSuccess] = useState(null);
-  const [historyOpen, setHistoryOpen] = useState(true);
-  const [activeTab, setActiveTab] = useState('history'); // 'history' | 'dashboard'
+  const [activeTab, setActiveTab] = useState('history');
   const [time, setTime] = useState('');
-  const [originSuggestions, setOriginSuggestions] = useState([]);
-  const [destSuggestions, setDestSuggestions] = useState([]);
+  const [theme, setThemeState] = useState('light');
+  const [soundOn, setSoundOn] = useState(true);
+  const [hapticOn, setHapticOn] = useState(true);
+  const [splashExiting, setSplashExiting] = useState(false);
+  const [splashGone, setSplashGone] = useState(false);
+  const [topLoading, setTopLoading] = useState(false);
   const initialized = useRef(false);
-  const originTyping = useRef(false);
-  const destTyping = useRef(false);
+  const feedback = useFeedback();
 
+  // ─── INIT: theme, sound prefs, splash ──────────────────────────────────
+  useEffect(() => {
+    setThemeState(getInitialTheme());
+    setSoundOn(localStorage.getItem(SOUND_KEY) !== 'off');
+    setHapticOn(localStorage.getItem(HAPTIC_KEY) !== 'off');
+
+    // Splash exit timing
+    const t1 = setTimeout(() => setSplashExiting(true), 1100);
+    const t2 = setTimeout(() => setSplashGone(true), 1700);
+    return () => { clearTimeout(t1); clearTimeout(t2); };
+  }, []);
+
+  // Live clock
   useEffect(() => {
     const update = () => {
       const d = new Date();
@@ -419,68 +617,31 @@ export default function KmTracker() {
     return () => clearInterval(id);
   }, []);
 
+  // Load trips
   useEffect(() => {
     const loaded = loadTrips();
     if (loaded && Array.isArray(loaded)) setTrips(loaded);
-    else { setTrips(SEED_TRIPS); saveTripsToStorage(SEED_TRIPS); }
+    else { setTrips(SEED_TRIPS); saveTrips(SEED_TRIPS); }
   }, []);
 
+  // Persist
+  useEffect(() => { if (trips.length > 0 || loadTrips()) saveTrips(trips); }, [trips]);
+
+  // Inject fonts + global CSS
   useEffect(() => {
     if (initialized.current) return;
     initialized.current = true;
     const fonts = document.createElement('link');
-    fonts.href = 'https://fonts.googleapis.com/css2?family=Syne:wght@500;600;700;800&family=Inter+Tight:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap';
+    fonts.href = 'https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600;700;800;900&family=Geist+Mono:wght@400;500;700&family=Instrument+Serif:ital@0;1&display=swap';
     fonts.rel = 'stylesheet';
     document.head.appendChild(fonts);
+
     const style = document.createElement('style');
-    style.textContent = `
-      * { box-sizing: border-box; }
-      body { margin: 0; padding: 0; }
-      @keyframes bubbleRise {
-        0% { transform: translateY(0) scale(0.6); opacity: 0; }
-        15% { opacity: 0.7; } 85% { opacity: 0.5; }
-        100% { transform: translateY(-260px) scale(1.1); opacity: 0; }
-      }
-      @keyframes fadeUp {
-        from { opacity: 0; transform: translateY(8px); }
-        to { opacity: 1; transform: translateY(0); }
-      }
-      @keyframes shimmer {
-        0% { background-position: -200% center; }
-        100% { background-position: 200% center; }
-      }
-      @keyframes blink {
-        0%,49% { opacity: 1; } 50%,100% { opacity: 0.3; }
-      }
-      @keyframes spin {
-        from { transform: rotate(0); } to { transform: rotate(360deg); }
-      }
-      .km-bubble {
-        position: absolute; border-radius: 50%;
-        background: radial-gradient(circle at 35% 35%, rgba(255,255,255,0.95), rgba(255,255,255,0.2) 70%);
-        animation: bubbleRise linear infinite; pointer-events: none;
-      }
-      .km-press:active { transform: scale(0.97); transition: transform 0.08s ease; }
-      .km-fade { animation: fadeUp 0.35s ease-out; }
-      .km-shimmer {
-        background: linear-gradient(90deg, #FFF 0%, #FFE5E7 50%, #FFF 100%);
-        background-size: 200% 100%;
-        animation: shimmer 3.5s linear infinite;
-        -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent;
-      }
-      .km-blink { animation: blink 1.2s step-end infinite; }
-      .km-spin { animation: spin 1s linear infinite; }
-      textarea:focus, input:focus { border-color: #E61A27 !important; outline: none; }
-      button { cursor: pointer; border: none; }
-    `;
+    style.textContent = CSS;
     document.head.appendChild(style);
   }, []);
 
-  useEffect(() => {
-    if (trips.length > 0 || loadTrips()) saveTripsToStorage(trips);
-  }, [trips]);
-
-  // Auto-calc distance + geometry
+  // Distance calculation
   useEffect(() => {
     if (origin.lat == null || destination.lat == null) {
       setDistance(null); setDistanceLabel(''); setRouteGeometry(null); return;
@@ -510,79 +671,11 @@ export default function KmTracker() {
     return () => { cancelled = true; };
   }, [origin.lat, origin.lng, destination.lat, destination.lng]);
 
-  function buildSuggestions(data, typedNum) {
-    return data.map(d => {
-      const hasNum = !!d.address?.house_number;
-      let display = formatBrazilianAddress(d);
-      if (typedNum && !hasNum) {
-        const dashIdx = display.indexOf(' - ');
-        if (dashIdx > -1) {
-          const street = display.substring(0, dashIdx).split(',')[0].trim();
-          display = `${street}, ${typedNum}${display.substring(dashIdx)}`;
-        } else {
-          display = `${display}, ${typedNum}`;
-        }
-      }
-      return { display, lat: +d.lat, lng: +d.lon, refineNum: typedNum && !hasNum ? typedNum : null };
-    });
-  }
-
-  // Autocomplete origin
-  useEffect(() => {
-    if (!originTyping.current) return;
-    const q = origin.address.trim();
-    if (q.length < 3) { setOriginSuggestions([]); return; }
-    const numMatch = q.match(/[\s,]+(\d{1,5})(?:\s*[-,]|\s|$)/);
-    const typedNum = numMatch ? numMatch[1] : '';
-    const timer = setTimeout(async () => {
-      try {
-        const r = await fetch(`https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(q)}&format=json&addressdetails=1&limit=5&accept-language=pt-BR&countrycodes=br`);
-        const data = await r.json();
-        if (originTyping.current) setOriginSuggestions(buildSuggestions(data, typedNum));
-      } catch { setOriginSuggestions([]); }
-    }, 400);
-    return () => clearTimeout(timer);
-  }, [origin.address]);
-
-  // Autocomplete destination
-  useEffect(() => {
-    if (!destTyping.current) return;
-    const q = destination.address.trim();
-    if (q.length < 3) { setDestSuggestions([]); return; }
-    const numMatch = q.match(/[\s,]+(\d{1,5})(?:\s*[-,]|\s|$)/);
-    const typedNum = numMatch ? numMatch[1] : '';
-    const timer = setTimeout(async () => {
-      try {
-        const r = await fetch(`https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(q)}&format=json&addressdetails=1&limit=5&accept-language=pt-BR&countrycodes=br`);
-        const data = await r.json();
-        if (destTyping.current) setDestSuggestions(buildSuggestions(data, typedNum));
-      } catch { setDestSuggestions([]); }
-    }, 400);
-    return () => clearTimeout(timer);
-  }, [destination.address]);
-
-  function selectSuggestion(which, suggestion) {
-    const setSt = which === 'origin' ? setOrigin : setDestination;
-    const setSugg = which === 'origin' ? setOriginSuggestions : setDestSuggestions;
-    if (which === 'origin') originTyping.current = false; else destTyping.current = false;
-    setSugg([]);
-    setSt({ address: suggestion.display, lat: suggestion.lat, lng: suggestion.lng });
-
-    if (suggestion.refineNum) {
-      const street = suggestion.display.split(' - ')[0].split(',')[0].trim();
-      const rest = suggestion.display.split(' - ').slice(1).join(' - ').trim();
-      const query = rest ? `${street}, ${suggestion.refineNum}, ${rest}` : `${street}, ${suggestion.refineNum}`;
-      fetch(`https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(query)}&format=json&addressdetails=1&limit=1&accept-language=pt-BR&countrycodes=br`)
-        .then(r => r.json())
-        .then(data => {
-          if (data.length > 0) setSt({ address: formatBrazilianAddress(data[0]), lat: +data[0].lat, lng: +data[0].lon });
-        })
-        .catch(() => {});
-    }
-  }
-
+  // ─── HANDLERS ───────────────────────────────────────────────────────────
   async function capture(which) {
     setError(null); setLoading(s => ({ ...s, [which]: true }));
+    setTopLoading(true);
+    feedback('tap');
     try {
       if (!navigator.geolocation) throw new Error('Geolocalização não disponível neste navegador');
       const pos = await new Promise((res, rej) => navigator.geolocation.getCurrentPosition(
@@ -594,31 +687,34 @@ export default function KmTracker() {
         )),
         { enableHighAccuracy: true, timeout: 20000, maximumAge: 0 }
       ));
-      const r = await fetch(`https://nominatim.openstreetmap.org/reverse?lat=${pos.lat}&lon=${pos.lng}&format=json&accept-language=pt-BR&addressdetails=1`);
-      const data = await r.json();
-      const address = formatBrazilianAddress(data);
-      const loc = { address, lat: pos.lat, lng: pos.lng };
-      if (which === 'origin') {
-        setOrigin(loc); setOriginSuggestions([]);
-      } else {
-        setDestination(loc); setDestSuggestions([]);
+      const result = await getAddressWithNumber(pos.lat, pos.lng);
+      const address = formatBrazilianAddress(result.data, result.number, result.isApprox);
+      (which === 'origin' ? setOrigin : setDestination)({ address, lat: pos.lat, lng: pos.lng });
+      feedback('success');
+      if (result.number && result.isApprox) {
+        setSuccess('Número aproximado · pode ajustar');
+        setTimeout(() => setSuccess(null), 2600);
+      } else if (!result.number) {
+        setSuccess('Sem número · adicione manualmente');
+        setTimeout(() => setSuccess(null), 2600);
       }
-    } catch (e) { setError(e.message); }
-    finally { setLoading(s => ({ ...s, [which]: false })); }
-  }
-
-  function clearLocation(which) {
-    if (which === 'origin') {
-      setOrigin({ address: '', lat: null, lng: null });
-      setOriginSuggestions([]);
-    } else {
-      setDestination({ address: '', lat: null, lng: null });
-      setDestSuggestions([]);
+    } catch (e) {
+      setError(e.message); feedback('error');
+    } finally {
+      setLoading(s => ({ ...s, [which]: false }));
+      setTopLoading(false);
     }
   }
 
+  function clearLocation(which) {
+    feedback('tap');
+    (which === 'origin' ? setOrigin : setDestination)({ address: '', lat: null, lng: null });
+  }
+
   function handleSave() {
-    if (!origin.address.trim() || !destination.address.trim()) { setError('Preencha origem e destino'); return; }
+    if (!origin.address.trim() || !destination.address.trim()) {
+      setError('Preencha origem e destino'); feedback('error'); return;
+    }
     const d = new Date();
     const newTrip = {
       id: 't' + Date.now(),
@@ -632,17 +728,20 @@ export default function KmTracker() {
     setTrips(prev => [newTrip, ...prev]);
     setOrigin({ address:'', lat:null, lng:null });
     setDestination({ address:'', lat:null, lng:null });
-    setOriginSuggestions([]); setDestSuggestions([]);
     setDistance(null); setDistanceLabel(''); setRouteGeometry(null); setError(null);
     setSuccess('Viagem registrada'); setTimeout(() => setSuccess(null), 2200);
+    feedback('success');
   }
 
   function deleteTrip(id) {
-    if (window.confirm('Remover esta viagem?')) setTrips(prev => prev.filter(t => t.id !== id));
+    if (window.confirm('Remover esta viagem?')) {
+      setTrips(prev => prev.filter(t => t.id !== id));
+      feedback('swoosh');
+    }
   }
 
   function exportToExcel() {
-    if (!trips.length) { setError('Nenhuma viagem para exportar'); return; }
+    if (!trips.length) { setError('Nenhuma viagem para exportar'); feedback('error'); return; }
     const sorted = [...trips].sort((a, b) => {
       const parse = s => { const [d,m,y] = s.split('/'); return new Date(y,m-1,d); };
       return parse(a.date) - parse(b.date);
@@ -654,316 +753,1243 @@ export default function KmTracker() {
     XLSX.utils.book_append_sheet(wb, ws, 'kmadicional');
     XLSX.writeFile(wb, 'lançamento_de_Km.xlsx');
     setSuccess('Planilha exportada'); setTimeout(() => setSuccess(null), 2200);
+    feedback('success');
   }
 
+  function handleToggleTheme() {
+    feedback('tap');
+    const next = toggleTheme(theme);
+    setThemeState(next);
+  }
+  function handleToggleSound() {
+    const next = !soundOn;
+    setSoundOn(next);
+    localStorage.setItem(SOUND_KEY, next ? 'on' : 'off');
+    if (next) feedback('tap');
+  }
+  function handleToggleHaptic() {
+    const next = !hapticOn;
+    setHapticOn(next);
+    localStorage.setItem(HAPTIC_KEY, next ? 'on' : 'off');
+    if (next && 'vibrate' in navigator) navigator.vibrate(15);
+  }
+  function handleTabSwitch(t) {
+    if (t === activeTab) return;
+    feedback('swoosh');
+    if (document.startViewTransition) {
+      document.startViewTransition(() => setActiveTab(t));
+    } else {
+      setActiveTab(t);
+    }
+  }
+
+  // ─── COMPUTED ───────────────────────────────────────────────────────────
   const totalKm = trips.reduce((s, t) => s + (t.km || 0), 0);
   const totalEarning = totalKm * RATE;
   const tripsWithKm = trips.filter(t => t.km != null).length;
   const canSave = origin.address.trim() && destination.address.trim();
 
-  const fD = "'Syne', system-ui, sans-serif";
-  const fM = "'JetBrains Mono', monospace";
-  const fB = "'Inter Tight', system-ui, sans-serif";
-
-  const bubbles = [
-    {left:'8%',size:14,delay:0,dur:7},{left:'22%',size:8,delay:2.2,dur:6},
-    {left:'38%',size:18,delay:4.5,dur:8},{left:'55%',size:10,delay:1.1,dur:6.5},
-    {left:'70%',size:16,delay:3.4,dur:7.5},{left:'85%',size:9,delay:5.7,dur:6},
-    {left:'92%',size:12,delay:0.6,dur:7.2},{left:'15%',size:6,delay:3.9,dur:5.5},
-    {left:'48%',size:7,delay:5.2,dur:6.8},
-  ];
-
-  const s = {
-    card: { backgroundColor:C.card, borderRadius:26, padding:24, marginBottom:18,
-      boxShadow:'0 2px 6px rgba(10,9,8,0.04), 0 16px 40px rgba(10,9,8,0.06)', border:`1px solid ${C.border}` },
-    redBar: { width:4, height:28, borderRadius:2, background:`linear-gradient(180deg, ${C.red}, ${C.redDeep})` },
-    label: { display:'flex', alignItems:'center', gap:8, fontFamily:fM, fontSize:10.5,
-      fontWeight:500, color:C.ink, letterSpacing:'0.18em', textTransform:'uppercase' },
-    textarea: { width:'100%', padding:'12px 14px', fontSize:14, fontFamily:fB, color:C.ink,
-      backgroundColor:C.bg, border:`1.5px solid ${C.border}`, borderRadius:14,
-      resize:'none', lineHeight:1.45, fontWeight:500 },
-    btnRed: { width:'100%', marginTop:9, padding:'13px 14px', borderRadius:14,
-      background:`linear-gradient(135deg, ${C.red} 0%, ${C.redDeep} 100%)`, color:C.white,
-      fontWeight:600, fontSize:13, fontFamily:fD, display:'flex', alignItems:'center',
-      justifyContent:'center', gap:8, letterSpacing:'0.04em',
-      boxShadow:'0 6px 18px rgba(230,26,39,0.32)' },
-    btnBlack: { width:'100%', marginTop:9, padding:'13px 14px', borderRadius:14,
-      background:C.black, color:C.white, fontWeight:600, fontSize:13, fontFamily:fD,
-      display:'flex', alignItems:'center', justifyContent:'center', gap:8,
-      letterSpacing:'0.04em', boxShadow:'0 6px 18px rgba(0,0,0,0.22)' },
-  };
-
-  const tabBtn = (active) => ({
-    flex: 1, padding: '11px 14px', borderRadius: 100,
-    background: active ? C.black : 'transparent',
-    color: active ? C.white : C.inkSoft,
-    fontFamily: fD, fontSize: 13, fontWeight: 600, letterSpacing: '-0.01em',
-    transition: 'all 0.2s ease',
-    display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7,
-    boxShadow: active ? '0 4px 12px rgba(0,0,0,0.15)' : 'none'
-  });
+  const marqueeText = ' · DRIVE LOG · COCA-COLA BR · FROTA · ' + numFmt.format(totalKm) + ' KM · ' + brlFmt.format(totalEarning) + ' · ' + String(trips.length).padStart(3,'0') + ' VIAGENS';
 
   return (
-    <div style={{ backgroundColor:C.bg, fontFamily:fB, color:C.ink, minHeight:'100vh' }}>
+    <div className="km-app" data-theme={theme}>
+      {!splashGone && <Splash exiting={splashExiting} />}
 
-      {/* HERO */}
-      <div style={{ position:'relative', background:`linear-gradient(160deg, ${C.red} 0%, ${C.redDeep} 55%, ${C.redDark} 100%)`, paddingBottom:64, overflow:'hidden' }}>
-        <div style={{ position:'absolute', inset:0, overflow:'hidden' }}>
-          {bubbles.map((b,i) => <span key={i} className="km-bubble" style={{ left:b.left, bottom:-20, width:b.size, height:b.size, animationDuration:`${b.dur}s`, animationDelay:`${b.delay}s` }} />)}
+      {topLoading && <div className="km-toploader" />}
+
+      {/* STATUS BAR */}
+      <div className="km-statusbar">
+        <div className="km-statusbar-inner">
+          <span className="km-mono km-mono-tiny">
+            <span className="km-status-dot" /> SYS · ONLINE
+          </span>
+          <span className="km-mono km-mono-tiny km-muted">{APP_VERSION} · DRIVE LOG</span>
+          <span className="km-mono km-mono-tiny">{time}</span>
         </div>
-        <div style={{ position:'absolute', inset:0, opacity:0.08, backgroundImage:'linear-gradient(rgba(255,255,255,0.4) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.4) 1px, transparent 1px)', backgroundSize:'32px 32px', pointerEvents:'none' }} />
-        <div style={{ position:'absolute', top:-60, right:-40, width:220, height:220, borderRadius:'50%', background:`radial-gradient(circle, #FF475766, transparent 70%)`, pointerEvents:'none' }} />
-
-        <div style={{ maxWidth:448, margin:'0 auto', padding:'20px 24px 0', position:'relative', zIndex:2 }}>
-          <div style={{ display:'flex', justifyContent:'space-between', fontFamily:fM, fontSize:10, color:'rgba(255,255,255,0.7)', letterSpacing:'0.08em' }}>
-            <div style={{ display:'flex', alignItems:'center', gap:6 }}>
-              <span className="km-blink" style={{ width:6, height:6, borderRadius:3, background:'#4ADE80', boxShadow:'0 0 6px #4ADE80', display:'inline-block' }} />
-              SYS · ONLINE
-            </div>
-            <span>{time}</span>
-          </div>
-
-          <div style={{ marginTop:28, display:'flex', alignItems:'flex-start', justifyContent:'space-between' }}>
-            <div>
-              <div style={{ fontFamily:fM, fontSize:10, letterSpacing:'0.3em', color:'rgba(255,255,255,0.7)', fontWeight:500 }}>[ v2·0 ] · DRIVE LOG</div>
-              <h1 style={{ fontFamily:fD, fontSize:52, lineHeight:0.88, color:C.white, marginTop:8, letterSpacing:'-0.04em', fontWeight:800, textShadow:'0 2px 24px rgba(0,0,0,0.18)', margin:'8px 0 0' }}>
-                Controle<br /><span style={{ fontStyle:'italic', fontWeight:700 }}>de </span>KM
-              </h1>
-            </div>
-            <div style={{ width:56, height:56, borderRadius:18, background:'rgba(255,255,255,0.12)', backdropFilter:'blur(12px)', border:'1px solid rgba(255,255,255,0.28)', display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0 }}>
-              <Navigation size={24} color={C.white} strokeWidth={2.2} />
-            </div>
-          </div>
-
-          <div style={{ marginTop:30 }}>
-            <div style={{ fontFamily:fM, fontSize:10, letterSpacing:'0.28em', color:'rgba(255,255,255,0.65)', fontWeight:500, display:'flex', alignItems:'center', gap:8 }}>
-              <span style={{ width:18, height:1, background:'rgba(255,255,255,0.4)', display:'inline-block' }} />
-              Total · {totalKm.toFixed(1)} km
-            </div>
-            <div style={{ display:'flex', alignItems:'baseline', gap:10, marginTop:6 }}>
-              <span style={{ fontFamily:fD, fontSize:22, color:'rgba(255,255,255,0.7)', fontWeight:700 }}>R$</span>
-              <div className="km-shimmer" style={{ fontFamily:fD, fontSize:64, lineHeight:0.88, letterSpacing:'-0.05em', fontWeight:800 }}>
-                {totalEarning.toFixed(2).replace('.',',')}
-              </div>
-            </div>
-            <div style={{ marginTop:12, display:'inline-flex', alignItems:'center', gap:10, padding:'6px 14px', borderRadius:100, background:'rgba(0,0,0,0.22)', border:'1px solid rgba(255,255,255,0.12)' }}>
-              <span className="km-blink" style={{ width:6, height:6, borderRadius:3, background:'#4ADE80', boxShadow:'0 0 8px #4ADE80', display:'inline-block' }} />
-              <span style={{ fontFamily:fM, fontSize:10.5, color:C.white, fontWeight:500, letterSpacing:'0.1em' }}>
-                {String(trips.length).padStart(3,'0')} trips · {String(tripsWithKm).padStart(3,'0')} medidas
-              </span>
-            </div>
-          </div>
-        </div>
-
-        <svg viewBox="0 0 400 60" preserveAspectRatio="none" style={{ position:'absolute', bottom:-1, left:0, width:'100%', height:64, display:'block' }}>
-          <path d="M0,40 C60,10 120,55 200,30 C280,5 340,50 400,25 L400,60 L0,60 Z" fill={C.bg} />
-          <path d="M0,40 C60,10 120,55 200,30 C280,5 340,50 400,25" fill="none" stroke="rgba(255,255,255,0.35)" strokeWidth="1.5" />
-        </svg>
       </div>
 
-      {/* CONTENT */}
-      <div style={{ maxWidth:448, margin:'-24px auto 0', padding:'0 20px 48px', position:'relative', zIndex:3 }}>
+      {/* HEADER */}
+      <header className="km-header">
+        <div className="km-aurora-bg" />
+        <div className="km-grid-overlay" />
 
+        <div className="km-header-top">
+          <div>
+            <div className="km-mono km-mono-tiny km-muted">[ {APP_VERSION} ] · MOTORISTA</div>
+            <h1 className="km-h1">
+              <span>CONTROLE</span>
+              <span className="km-h1-italic">de KM</span>
+            </h1>
+          </div>
+          <div className="km-header-actions">
+            <button onClick={handleToggleTheme} className="km-icon-btn" aria-label="Trocar tema">
+              {theme === 'dark' ? <Sun size={16} strokeWidth={2.4} /> : <Moon size={16} strokeWidth={2.4} />}
+            </button>
+            <button onClick={handleToggleSound} className="km-icon-btn" aria-label="Som">
+              {soundOn ? <Volume2 size={16} strokeWidth={2.4} /> : <VolumeX size={16} strokeWidth={2.4} />}
+            </button>
+            <button onClick={handleToggleHaptic} className="km-icon-btn" aria-label="Vibração">
+              <Vibrate size={16} strokeWidth={2.4} style={{ opacity: hapticOn ? 1 : 0.35 }} />
+            </button>
+          </div>
+        </div>
+
+        {/* HERO METRIC EDITORIAL */}
+        <div className="km-hero">
+          <div className="km-mono km-mono-label">
+            <span className="km-line" />
+            VALOR A RECEBER
+          </div>
+          <div className="km-hero-value">
+            <BigCurrency value={totalEarning} size="hero" />
+          </div>
+          <div className="km-hero-meta-row">
+            <span className="km-pill">
+              <span className="km-status-dot km-status-dot--green" />
+              <span className="km-mono km-mono-tiny">{numFmt.format(totalKm)} KM TOTAIS</span>
+            </span>
+            <span className="km-mono km-mono-tiny km-muted">
+              {String(trips.length).padStart(3,'0')} TRIPS · {String(tripsWithKm).padStart(3,'0')} MED
+            </span>
+          </div>
+        </div>
+
+        {/* WAVE */}
+        <svg viewBox="0 0 400 60" preserveAspectRatio="none" className="km-wave">
+          <path d="M0,40 C60,10 120,55 200,30 C280,5 340,50 400,25 L400,60 L0,60 Z" fill="var(--bg-base)" />
+          <path d="M0,40 C60,10 120,55 200,30 C280,5 340,50 400,25" fill="none" stroke="rgba(255,255,255,0.4)" strokeWidth="1" />
+        </svg>
+      </header>
+
+      {/* CONTENT */}
+      <main className="km-main">
+        {/* ALERTS */}
         {error && (
-          <div className="km-fade" style={{ backgroundColor:'#FFF1F2', border:`1.5px solid ${C.red}`, borderRadius:16, padding:'12px 14px', display:'flex', gap:10, alignItems:'flex-start', marginBottom:14, boxShadow:'0 4px 14px rgba(230,26,39,0.12)' }}>
-            <AlertCircle size={20} color={C.redDeep} style={{ marginTop:1, flexShrink:0 }} strokeWidth={2.4} />
-            <p style={{ fontSize:13, color:C.redDark, flex:1, lineHeight:1.4, fontWeight:500, margin:0 }}>{error}</p>
-            <button onClick={() => setError(null)} style={{ color:C.redDeep, padding:2, background:'none' }}><X size={16} /></button>
+          <div className="km-alert km-alert--err km-fade-in">
+            <AlertCircle size={18} strokeWidth={2.4} />
+            <p>{error}</p>
+            <button onClick={() => setError(null)}><X size={14} /></button>
           </div>
         )}
         {success && (
-          <div className="km-fade" style={{ background:`linear-gradient(135deg, ${C.red}, ${C.redDeep})`, borderRadius:16, padding:'12px 16px', display:'flex', gap:10, alignItems:'center', marginBottom:14, boxShadow:'0 8px 24px rgba(230,26,39,0.32)' }}>
-            <Sparkles size={16} color={C.white} strokeWidth={2.4} />
-            <p style={{ fontSize:14, color:C.white, fontWeight:600, fontFamily:fD, letterSpacing:'-0.01em', margin:0 }}>{success}</p>
+          <div className="km-alert km-alert--ok km-fade-in">
+            <span className="km-status-dot km-status-dot--green" />
+            <p>{success}</p>
           </div>
         )}
 
-        {/* NEW TRIP CARD */}
-        <section style={s.card}>
-          <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:18 }}>
-            <div style={{ display:'flex', alignItems:'center', gap:12 }}>
-              <div style={s.redBar} />
-              <h2 style={{ fontFamily:fD, fontSize:26, color:C.ink, letterSpacing:'-0.03em', fontWeight:700, margin:0 }}>Nova viagem</h2>
+        {/* NEW TRIP */}
+        <section className="km-card">
+          <header className="km-card-head km-card-head--bordered">
+            <div className="km-row-tight">
+              <span className="km-redbar" />
+              <h2 className="km-h2">Nova viagem</h2>
             </div>
-            <span style={{ fontFamily:fM, fontSize:9.5, color:C.inkFaded, letterSpacing:'0.16em' }}>001/REC</span>
-          </div>
+            <span className="km-mono km-mono-tiny km-muted">001/REC</span>
+          </header>
 
           {/* Origin */}
-          <div style={{ marginBottom:14 }}>
-            <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:10 }}>
-              <label style={s.label}>
-                <span style={{ width:10, height:10, borderRadius:5, background:`radial-gradient(circle at 30% 30%, ${C.redBright}, ${C.redDeep})`, boxShadow:`0 0 0 3px rgba(230,26,39,0.15)`, display:'inline-block' }} />
-                · Origem
+          <div className="km-field">
+            <div className="km-field-head">
+              <label className="km-mono km-mono-label">
+                <span className="km-dot km-dot--red" />· ORIGEM
               </label>
-              {origin.address && <button onClick={() => clearLocation('origin')} style={{ fontFamily:fM, fontSize:10, color:C.inkFaded, background:'none', letterSpacing:'0.1em', textTransform:'uppercase' }}>clear</button>}
-            </div>
-            <div style={{ position:'relative' }}>
-              <textarea value={origin.address} onChange={e => { originTyping.current = true; setOrigin({ address: e.target.value, lat: null, lng: null }); }} onBlur={() => setTimeout(() => setOriginSuggestions([]), 200)} placeholder="Digite o endereço de partida" rows={2} style={s.textarea} />
-              {originSuggestions.length > 0 && (
-                <div style={{ position:'absolute', top:'100%', left:0, right:0, zIndex:20, backgroundColor:C.card, borderRadius:12, marginTop:4, boxShadow:'0 8px 24px rgba(10,9,8,0.15)', border:`1.5px solid ${C.border}`, overflow:'hidden', maxHeight:200, overflowY:'auto' }}>
-                  {originSuggestions.map((sg, i) => (
-                    <button key={i} onMouseDown={e => e.preventDefault()} onClick={() => selectSuggestion('origin', sg)} style={{ width:'100%', padding:'10px 14px', background:'none', textAlign:'left', fontSize:12, fontFamily:fB, color:C.inkSoft, lineHeight:1.4, borderTop: i > 0 ? `1px solid ${C.border}` : 'none', display:'flex', alignItems:'flex-start', gap:8 }}>
-                      <MapPin size={14} color={C.red} style={{ marginTop:2, flexShrink:0 }} strokeWidth={2.2} />
-                      <span>{sg.display}</span>
-                    </button>
-                  ))}
-                </div>
+              {origin.address && (
+                <button onClick={() => clearLocation('origin')} className="km-textbtn">CLEAR</button>
               )}
             </div>
-            {origin.lat && <div style={{ marginTop:6 }}><span style={{ fontFamily:fM, fontSize:9, color:C.green, letterSpacing:'0.08em' }}>● coordenadas OK</span></div>}
-            <button onClick={() => capture('origin')} disabled={loading.origin} className="km-press" style={{ ...s.btnRed, background: loading.origin ? C.borderDark : s.btnRed.background, boxShadow: loading.origin ? 'none' : s.btnRed.boxShadow, cursor: loading.origin ? 'not-allowed' : 'pointer' }}>
-              {loading.origin ? <><Loader2 size={16} className="km-spin" /> Buscando…</> : <><MapPin size={16} strokeWidth={2.4} /> Capturar localização</>}
+            <textarea value={origin.address} onChange={e => setOrigin({...origin, address:e.target.value})} placeholder="Endereço de partida" rows={2} className="km-textarea" />
+            <button onClick={() => capture('origin')} disabled={loading.origin} className="km-btn km-btn--red km-btn--block km-press">
+              {loading.origin ? <><Loader2 size={15} className="km-spin" /> BUSCANDO…</> : <><MapPin size={15} strokeWidth={2.4} /> CAPTURAR LOCALIZAÇÃO</>}
             </button>
           </div>
 
-          <div style={{ display:'flex', alignItems:'center', gap:10, marginLeft:4, padding:'6px 0' }}>
-            <ArrowDown size={12} color={C.inkFaded} strokeWidth={2.4} />
-            <div style={{ flex:1, height:1, background:`repeating-linear-gradient(90deg, ${C.borderDark} 0 4px, transparent 4px 8px)` }} />
-            <span style={{ fontFamily:fM, fontSize:9, color:C.inkFaded, letterSpacing:'0.16em', textTransform:'uppercase' }}>destino</span>
-            <div style={{ flex:1, height:1, background:`repeating-linear-gradient(90deg, ${C.borderDark} 0 4px, transparent 4px 8px)` }} />
+          {/* Connector */}
+          <div className="km-connector">
+            <ArrowDown size={11} strokeWidth={2.4} />
+            <div className="km-dashed" />
+            <span className="km-mono km-mono-tiny">DESTINO</span>
+            <div className="km-dashed" />
           </div>
 
           {/* Destination */}
-          <div style={{ marginBottom:18 }}>
-            <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:10 }}>
-              <label style={s.label}>
-                <Flag size={14} color={C.black} fill={C.black} strokeWidth={2.4} />
-                · Destino
+          <div className="km-field">
+            <div className="km-field-head">
+              <label className="km-mono km-mono-label">
+                <Flag size={11} strokeWidth={2.4} fill="currentColor" />· DESTINO
               </label>
-              {destination.address && <button onClick={() => clearLocation('destination')} style={{ fontFamily:fM, fontSize:10, color:C.inkFaded, background:'none', letterSpacing:'0.1em', textTransform:'uppercase' }}>clear</button>}
-            </div>
-            <div style={{ position:'relative' }}>
-              <textarea value={destination.address} onChange={e => { destTyping.current = true; setDestination({ address: e.target.value, lat: null, lng: null }); }} onBlur={() => setTimeout(() => setDestSuggestions([]), 200)} placeholder="Digite o endereço de chegada" rows={2} style={s.textarea} />
-              {destSuggestions.length > 0 && (
-                <div style={{ position:'absolute', top:'100%', left:0, right:0, zIndex:20, backgroundColor:C.card, borderRadius:12, marginTop:4, boxShadow:'0 8px 24px rgba(10,9,8,0.15)', border:`1.5px solid ${C.border}`, overflow:'hidden', maxHeight:200, overflowY:'auto' }}>
-                  {destSuggestions.map((sg, i) => (
-                    <button key={i} onMouseDown={e => e.preventDefault()} onClick={() => selectSuggestion('destination', sg)} style={{ width:'100%', padding:'10px 14px', background:'none', textAlign:'left', fontSize:12, fontFamily:fB, color:C.inkSoft, lineHeight:1.4, borderTop: i > 0 ? `1px solid ${C.border}` : 'none', display:'flex', alignItems:'flex-start', gap:8 }}>
-                      <Flag size={14} color={C.black} style={{ marginTop:2, flexShrink:0 }} strokeWidth={2.2} />
-                      <span>{sg.display}</span>
-                    </button>
-                  ))}
-                </div>
+              {destination.address && (
+                <button onClick={() => clearLocation('destination')} className="km-textbtn">CLEAR</button>
               )}
             </div>
-            {destination.lat && <div style={{ marginTop:6 }}><span style={{ fontFamily:fM, fontSize:9, color:C.green, letterSpacing:'0.08em' }}>● coordenadas OK</span></div>}
-            <button onClick={() => capture('destination')} disabled={loading.destination} className="km-press" style={{ ...s.btnBlack, background: loading.destination ? C.borderDark : C.black, boxShadow: loading.destination ? 'none' : s.btnBlack.boxShadow, cursor: loading.destination ? 'not-allowed' : 'pointer' }}>
-              {loading.destination ? <><Loader2 size={16} className="km-spin" /> Buscando…</> : <><Flag size={16} strokeWidth={2.4} /> Capturar localização</>}
+            <textarea value={destination.address} onChange={e => setDestination({...destination, address:e.target.value})} placeholder="Endereço de chegada" rows={2} className="km-textarea" />
+            <button onClick={() => capture('destination')} disabled={loading.destination} className="km-btn km-btn--ink km-btn--block km-press">
+              {loading.destination ? <><Loader2 size={15} className="km-spin" /> BUSCANDO…</> : <><Flag size={15} strokeWidth={2.4} /> CAPTURAR LOCALIZAÇÃO</>}
             </button>
           </div>
 
-          {/* Odometer */}
-          <div style={{ background:`linear-gradient(135deg, ${C.black} 0%, #1A1414 100%)`, borderRadius:18, padding:'18px 20px', marginBottom:16, display:'flex', alignItems:'center', justifyContent:'space-between', position:'relative', overflow:'hidden', border:`1px solid rgba(230,26,39,0.25)` }}>
-            <div style={{ position:'absolute', top:-30, right:-30, width:120, height:120, borderRadius:60, background:`radial-gradient(circle, rgba(230,26,39,0.4), transparent 70%)`, pointerEvents:'none' }} />
-            <div style={{ position:'absolute', inset:0, opacity:0.08, backgroundImage:'linear-gradient(rgba(255,255,255,0.4) 1px, transparent 1px)', backgroundSize:'100% 12px', pointerEvents:'none' }} />
-            <div style={{ position:'relative' }}>
-              <div style={{ fontFamily:fM, fontSize:9.5, letterSpacing:'0.26em', color:'rgba(255,255,255,0.55)', textTransform:'uppercase', fontWeight:500 }}>◊ Distância</div>
+          {/* Odometer (BRUTALIST DARK) */}
+          <div className="km-odometer">
+            <div className="km-odometer-glow" />
+            <div className="km-odometer-grid" />
+            <div className="km-odometer-info">
+              <div className="km-mono km-mono-label km-odometer-label">◊ DISTÂNCIA</div>
               {distance != null && (
-                <div style={{ fontFamily:fM, fontSize:10, color:'#FF6B7A', marginTop:4, fontWeight:600, letterSpacing:'0.04em' }}>
-                  {formatBRL(distance * RATE)}
-                </div>
+                <div className="km-odometer-money">{brlFmt.format(distance * RATE)}</div>
               )}
               {distanceLabel && (
-                <div style={{ fontFamily:fM, fontSize:9.5, color:'rgba(255,255,255,0.4)', marginTop:3 }}>{distanceLabel}</div>
+                <div className="km-mono km-mono-tiny km-odometer-sublabel">{distanceLabel}</div>
               )}
             </div>
-            <div style={{ position:'relative' }}>
+            <div className="km-odometer-display">
               {loading.distance
-                ? <Loader2 size={24} color={C.red} className="km-spin" />
+                ? <Loader2 size={28} className="km-spin" style={{ color: 'var(--coca-red)' }} />
                 : distance != null
-                  ? <div style={{ display:'flex', alignItems:'baseline', gap:7 }}>
-                      <span style={{ fontFamily:fM, fontSize:36, color:C.white, lineHeight:1, letterSpacing:'-0.02em', fontWeight:700, textShadow:`0 0 18px rgba(230,26,39,0.5)` }}>{distance.toFixed(2)}</span>
-                      <span style={{ fontFamily:fD, fontSize:14, color:C.red, letterSpacing:'0.04em', fontWeight:700, fontStyle:'italic' }}>km</span>
+                  ? <div className="km-odometer-num">
+                      <span>{numFmt.format(distance)}</span>
+                      <span className="km-odometer-unit">KM</span>
                     </div>
-                  : <div style={{ fontFamily:fM, fontSize:28, color:'rgba(255,255,255,0.22)', fontWeight:500 }}>--.--</div>
+                  : <div className="km-odometer-empty">--.--</div>
               }
             </div>
           </div>
 
-          <button onClick={handleSave} disabled={!canSave} className="km-press" style={{ width:'100%', padding:'17px', borderRadius:16, background: canSave ? `linear-gradient(135deg, ${C.red} 0%, ${C.redDeep} 100%)` : C.borderDark, color:C.white, fontWeight:700, fontSize:16, fontFamily:fD, display:'flex', alignItems:'center', justifyContent:'center', gap:10, cursor: canSave ? 'pointer' : 'not-allowed', letterSpacing:'-0.01em', boxShadow: canSave ? '0 12px 28px rgba(230,26,39,0.36)' : 'none' }}>
-            <Save size={16} strokeWidth={2.4} /> Registrar viagem
+          <button onClick={handleSave} disabled={!canSave} className="km-btn km-btn--save km-btn--block km-press">
+            <Save size={16} strokeWidth={2.4} /> REGISTRAR VIAGEM
           </button>
         </section>
 
-        {/* TAB SWITCHER */}
-        <div style={{
-          display:'flex', background:C.card, borderRadius:100, padding:5,
-          marginBottom:14, border:`1px solid ${C.border}`,
-          boxShadow:'0 2px 8px rgba(10,9,8,0.04)'
-        }}>
-          <button onClick={() => setActiveTab('history')} style={tabBtn(activeTab === 'history')}>
-            <History size={14} strokeWidth={2.4} /> Histórico
+        {/* TABS */}
+        <div className="km-tabs">
+          <button onClick={() => handleTabSwitch('history')} className={`km-tab ${activeTab === 'history' ? 'km-tab--active' : ''}`}>
+            <History size={14} strokeWidth={2.4} /> HISTÓRICO
           </button>
-          <button onClick={() => setActiveTab('dashboard')} style={tabBtn(activeTab === 'dashboard')}>
-            <TrendingUp size={14} strokeWidth={2.4} /> Dashboard
+          <button onClick={() => handleTabSwitch('dashboard')} className={`km-tab ${activeTab === 'dashboard' ? 'km-tab--active' : ''}`}>
+            <TrendingUp size={14} strokeWidth={2.4} /> DASHBOARD
           </button>
         </div>
 
         {/* TAB CONTENT */}
-        {activeTab === 'dashboard' ? (
-          <Dashboard trips={trips} fD={fD} fM={fM} fB={fB} />
-        ) : (
-          <section style={{ ...s.card, marginBottom:0 }} className="km-fade">
-            <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:20 }}>
-              <button onClick={() => setHistoryOpen(!historyOpen)} style={{ display:'flex', alignItems:'center', gap:12, background:'none', padding:0 }}>
-                <div style={s.redBar} />
-                <h2 style={{ fontFamily:fD, fontSize:26, color:C.ink, letterSpacing:'-0.03em', fontWeight:700, margin:0 }}>Histórico</h2>
-                <span style={{ fontFamily:fM, fontSize:11, color:C.white, background:C.black, padding:'3px 9px', borderRadius:8, letterSpacing:'0.06em' }}>{String(trips.length).padStart(2,'0')}</span>
-                {historyOpen ? <ChevronUp size={16} color={C.inkFaded} /> : <ChevronDown size={16} color={C.inkFaded} />}
-              </button>
-              <button onClick={exportToExcel} className="km-press" style={{ padding:'10px 14px', borderRadius:12, background:C.black, color:C.white, fontSize:12, fontWeight:600, fontFamily:fD, display:'flex', alignItems:'center', gap:7, letterSpacing:'0.01em' }}>
-                <Download size={14} strokeWidth={2.4} /> Exportar
-              </button>
-            </div>
+        <div className="km-tabcontent" key={activeTab}>
+          {activeTab === 'dashboard' ? (
+            <Dashboard trips={trips} />
+          ) : (
+            <section className="km-card km-fade-up">
+              <header className="km-card-head km-card-head--bordered">
+                <div className="km-row-tight">
+                  <span className="km-redbar" />
+                  <h2 className="km-h2">Histórico</h2>
+                  <span className="km-mono km-mono-tiny km-pill-dark">{String(trips.length).padStart(2,'0')}</span>
+                </div>
+                <button onClick={exportToExcel} className="km-btn km-btn--ink km-btn--small km-press">
+                  <Download size={13} strokeWidth={2.4} /> EXPORTAR
+                </button>
+              </header>
 
-            {historyOpen && (
-              trips.length === 0
-                ? <p style={{ fontSize:13, color:C.inkFaded, textAlign:'center', padding:'24px 0', fontStyle:'italic', fontFamily:fD }}>Nenhuma viagem registrada ainda.</p>
-                : <div>
-                    {trips.map((trip, idx) => (
-                      <article key={trip.id} style={{ borderTop: idx === 0 ? 'none' : `1px solid ${C.border}`, paddingTop: idx === 0 ? 0 : 16, paddingBottom:8, marginBottom:8 }}>
-                        <div style={{ display:'flex', alignItems:'flex-start', justifyContent:'space-between', marginBottom:10 }}>
-                          <span style={{ fontFamily:fM, fontSize:10.5, fontWeight:500, color:C.inkFaded, letterSpacing:'0.14em' }}>
-                            #{String(trips.length - idx).padStart(3,'0')} · {trip.date}
-                          </span>
-                          <div style={{ display:'flex', alignItems:'center', gap:8 }}>
-                            {trip.km != null
-                              ? <div style={{ display:'flex', flexDirection:'column', alignItems:'flex-end', gap:3 }}>
-                                  <span style={{ fontFamily:fM, fontSize:11, fontWeight:700, background:`linear-gradient(135deg, ${C.red}, ${C.redDeep})`, color:C.white, padding:'4px 10px', borderRadius:100, letterSpacing:'0.04em', boxShadow:'0 4px 10px rgba(230,26,39,0.28)' }}>{trip.km.toFixed(2)} km</span>
-                                  <span style={{ fontFamily:fM, fontSize:10, fontWeight:600, color:C.green, letterSpacing:'0.04em' }}>{formatBRL(trip.km * RATE)}</span>
-                                </div>
-                              : <span style={{ fontFamily:fM, fontSize:10, color:C.inkFaded, fontStyle:'italic' }}>sem medição</span>
-                            }
-                            <button onClick={() => deleteTrip(trip.id)} style={{ color:C.inkFaded, padding:3, background:'none' }}><Trash2 size={14} /></button>
-                          </div>
+              {trips.length === 0 ? (
+                <p className="km-empty">Nenhuma viagem registrada ainda.</p>
+              ) : (
+                <ul className="km-trip-list">
+                  {trips.map((trip, idx) => (
+                    <li key={trip.id} className="km-trip">
+                      <div className="km-trip-head">
+                        <span className="km-mono km-mono-tiny">
+                          #{String(trips.length - idx).padStart(3,'0')} <span className="km-muted">·</span> {trip.date}
+                        </span>
+                        <div className="km-trip-head-right">
+                          {trip.km != null ? (
+                            <div className="km-trip-km">
+                              <span className="km-trip-km-pill">{numFmt.format(trip.km)} KM</span>
+                              <span className="km-mono km-mono-tiny km-trip-km-money">{brlFmt.format(trip.km * RATE)}</span>
+                            </div>
+                          ) : (
+                            <span className="km-mono km-mono-tiny km-muted km-italic">SEM MEDIÇÃO</span>
+                          )}
+                          <button onClick={() => deleteTrip(trip.id)} className="km-icon-btn-tiny"><Trash2 size={13} /></button>
                         </div>
-                        <div style={{ fontSize:13, lineHeight:1.5, color:C.inkSoft, fontWeight:500 }}>
-                          <div style={{ display:'flex', gap:10, alignItems:'flex-start' }}>
-                            <span style={{ width:8, height:8, borderRadius:4, background:`radial-gradient(circle at 30% 30%, ${C.redBright}, ${C.redDeep})`, marginTop:6, flexShrink:0, display:'inline-block' }} />
-                            <span>{trip.origin}</span>
-                          </div>
-                          <div style={{ marginLeft:3.5, height:12, width:1, background:C.borderDark, margin:'2px 0 2px 3.5px' }} />
-                          <div style={{ display:'flex', gap:10, alignItems:'flex-start' }}>
-                            <Flag size={12} color={C.black} fill={C.black} strokeWidth={2.4} style={{ marginTop:4, flexShrink:0 }} />
-                            <span>{trip.destination}</span>
-                          </div>
+                      </div>
+                      <div className="km-trip-body">
+                        <div className="km-trip-line">
+                          <span className="km-dot km-dot--red" />
+                          <span>{trip.origin}</span>
                         </div>
-
-                        {/* MINI MAP */}
-                        <MiniMap geometry={trip.geometry} fM={fM} />
-                      </article>
-                    ))}
-                  </div>
-            )}
-          </section>
-        )}
-
-        <div style={{ marginTop:26, textAlign:'center' }}>
-          <p style={{ fontFamily:fM, fontSize:10, color:C.inkFaded, lineHeight:1.7, letterSpacing:'0.12em', textTransform:'uppercase', margin:0 }}>
-            ◊ Dados salvos no seu celular ◊<br />
-            <span style={{ color:C.red }}>R$ 1,14 por km · exportar gera o excel</span>
-          </p>
+                        <div className="km-trip-vline" />
+                        <div className="km-trip-line">
+                          <Flag size={11} fill="currentColor" strokeWidth={2.4} className="km-trip-flag" />
+                          <span>{trip.destination}</span>
+                        </div>
+                      </div>
+                      <MiniMap geometry={trip.geometry} />
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </section>
+          )}
         </div>
-      </div>
+
+        {/* MARQUEE FOOTER */}
+        <div className="km-marquee">
+          <div className="km-marquee-track">
+            <span>{marqueeText}{marqueeText}{marqueeText}</span>
+          </div>
+        </div>
+
+        <footer className="km-footer">
+          <p className="km-mono km-mono-tiny km-muted">
+            ◊ DADOS LOCAIS · CRIPTOGRAFIA NATIVA ◊<br />
+            <span className="km-coca">R$ 1,14 / KM</span> · ~ = NÚMERO APROXIMADO
+          </p>
+        </footer>
+      </main>
     </div>
   );
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// CSS — Brutalist Editorial Bold (Sprint 1-4 do playbook)
+// ═══════════════════════════════════════════════════════════════════════════
+const CSS = `
+:root {
+  --font-display: 'Geist', system-ui, sans-serif;
+  --font-mono: 'Geist Mono', 'JetBrains Mono', ui-monospace, monospace;
+  --font-serif: 'Instrument Serif', Georgia, serif;
+  --font-body: 'Geist', system-ui, sans-serif;
+  --ease-ios: cubic-bezier(0.32, 0.72, 0, 1);
+  --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+[data-theme="light"] {
+  --bg-base: #FAFAFA;
+  --bg-surface: #FFFFFF;
+  --bg-elevated: #F5F5F5;
+  --bg-overlay: #ECECEC;
+  --bg-dark: #0A0A0A;
+  --text-primary: #09090B;
+  --text-secondary: #52525B;
+  --text-muted: #9A938D;
+  --border-subtle: #E8E0D6;
+  --border-default: #C9BDAE;
+  --border-strong: #0A0A0A;
+  --coca-red: #E61A27;
+  --coca-red-hover: #D11620;
+  --coca-red-active: #B80F1B;
+  --coca-red-glow: rgba(230, 26, 39, 0.18);
+  --coca-red-soft: rgba(230, 26, 39, 0.08);
+  --status-green: #16A34A;
+  --map-grid: rgba(10, 9, 8, 0.06);
+  --aurora: radial-gradient(ellipse 70% 60% at 50% -20%, rgba(230,26,39,0.08), transparent 70%);
+}
+
+[data-theme="dark"] {
+  --bg-base: #0A0A0A;
+  --bg-surface: #111111;
+  --bg-elevated: #1A1A1A;
+  --bg-overlay: #242424;
+  --bg-dark: #050505;
+  --text-primary: #EDEDED;
+  --text-secondary: #A1A1AA;
+  --text-muted: #71717A;
+  --border-subtle: #1F1F1F;
+  --border-default: #2A2A2A;
+  --border-strong: #EDEDED;
+  --coca-red: #FF4D5A;
+  --coca-red-hover: #FF6670;
+  --coca-red-active: #E63B47;
+  --coca-red-glow: rgba(255, 77, 90, 0.22);
+  --coca-red-soft: rgba(255, 77, 90, 0.10);
+  --status-green: #4ADE80;
+  --map-grid: rgba(255, 255, 255, 0.06);
+  --aurora: radial-gradient(ellipse 70% 60% at 50% -20%, rgba(255,77,90,0.12), transparent 70%);
+}
+
+* { box-sizing: border-box; }
+*, .numeric, [data-num], .km-mono {
+  font-variant-numeric: tabular-nums lining-nums slashed-zero;
+  font-feature-settings: 'tnum' 1, 'lnum' 1, 'zero' 1;
+}
+html, body { margin: 0; padding: 0; background: var(--bg-base); }
+body {
+  font-family: var(--font-body);
+  color: var(--text-primary);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* ─── ANIMATIONS ──────────────────────────────────────── */
+@keyframes fadeUp { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+@keyframes spin { from { transform: rotate(0); } to { transform: rotate(360deg); } }
+@keyframes pulse { 0%,49% { opacity: 1; } 50%,100% { opacity: 0.35; } }
+@keyframes shimmer { 0% { background-position: -200% center; } 100% { background-position: 200% center; } }
+@keyframes marquee { from { transform: translateX(0); } to { transform: translateX(-33.33%); } }
+@keyframes splashIn { from { opacity: 0; transform: scale(0.95); } to { opacity: 1; transform: scale(1); } }
+@keyframes splashBar { 0% { width: 0; } 100% { width: 100%; } }
+@keyframes routeDash { from { stroke-dashoffset: 200; } to { stroke-dashoffset: 0; } }
+@keyframes loaderSlide { 0% { transform: translateX(-100%); } 100% { transform: translateX(100%); } }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+}
+
+.km-fade-up { animation: fadeUp 0.4s var(--ease-ios) both; }
+.km-fade-in { animation: fadeIn 0.3s var(--ease-ios) both; }
+.km-spin { animation: spin 1s linear infinite; }
+
+/* ─── APP SHELL ──────────────────────────────────────── */
+.km-app {
+  background: var(--bg-base);
+  color: var(--text-primary);
+  min-height: 100vh;
+  font-family: var(--font-body);
+  position: relative;
+  overflow-x: hidden;
+}
+
+/* ─── SPLASH ─────────────────────────────────────────── */
+.km-splash {
+  position: fixed; inset: 0; z-index: 9999;
+  background: var(--coca-red);
+  display: flex; align-items: center; justify-content: center;
+  transition: opacity 0.55s var(--ease-ios), transform 0.55s var(--ease-ios);
+}
+.km-splash--exit { opacity: 0; transform: scale(1.04); pointer-events: none; }
+.km-splash-grid {
+  position: absolute; inset: 0;
+  background-image: linear-gradient(rgba(255,255,255,0.18) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.18) 1px, transparent 1px);
+  background-size: 32px 32px;
+  opacity: 0.4;
+}
+.km-splash-content {
+  position: relative; text-align: center; color: #FFF;
+  animation: splashIn 0.5s var(--ease-out-expo) both;
+}
+.km-splash-mono {
+  font-family: var(--font-mono); font-size: 11px;
+  letter-spacing: 0.32em; opacity: 0.75; text-transform: uppercase;
+  margin-bottom: 18px;
+}
+.km-splash-mono--small { margin-top: 22px; opacity: 0.6; }
+.km-splash-title {
+  font-family: var(--font-display); font-weight: 900; font-size: 64px;
+  line-height: 0.85; letter-spacing: -0.05em;
+  display: flex; flex-direction: column; align-items: center; margin: 0;
+}
+.km-splash-italic {
+  font-family: var(--font-serif); font-style: italic; font-weight: 400;
+  font-size: 56px; margin-top: -4px;
+}
+.km-splash-bar {
+  width: 180px; height: 2px; background: rgba(255,255,255,0.2);
+  margin: 22px auto 0; overflow: hidden;
+}
+.km-splash-bar-fill {
+  height: 100%; background: #FFF;
+  animation: splashBar 1.1s var(--ease-out-expo) both;
+}
+
+/* ─── TOP LOADER ─────────────────────────────────────── */
+.km-toploader {
+  position: fixed; top: 0; left: 0; right: 0; height: 2px;
+  background: linear-gradient(90deg, transparent, var(--coca-red), transparent);
+  z-index: 9998;
+  animation: loaderSlide 1.2s linear infinite;
+}
+
+/* ─── STATUS BAR ─────────────────────────────────────── */
+.km-statusbar {
+  background: var(--bg-dark);
+  border-bottom: 1px solid var(--border-subtle);
+}
+.km-statusbar-inner {
+  max-width: 448px; margin: 0 auto;
+  padding: 6px 18px;
+  display: flex; justify-content: space-between; align-items: center;
+  color: rgba(255,255,255,0.65);
+}
+.km-status-dot {
+  display: inline-block; width: 6px; height: 6px;
+  background: var(--status-green); border-radius: 50%;
+  box-shadow: 0 0 6px var(--status-green);
+  animation: pulse 1.5s step-end infinite;
+  margin-right: 6px;
+  vertical-align: middle;
+}
+.km-status-dot--green { background: var(--status-green); }
+
+/* ─── HEADER ─────────────────────────────────────────── */
+.km-header {
+  position: relative;
+  background: var(--bg-base);
+  border-bottom: 2px solid var(--border-strong);
+  padding: 22px 18px 64px;
+  overflow: hidden;
+}
+.km-aurora-bg {
+  position: absolute; inset: 0;
+  background: var(--aurora);
+  pointer-events: none;
+}
+.km-grid-overlay {
+  position: absolute; inset: 0;
+  background-image: linear-gradient(var(--map-grid) 1px, transparent 1px), linear-gradient(90deg, var(--map-grid) 1px, transparent 1px);
+  background-size: 28px 28px;
+  pointer-events: none;
+  opacity: 0.6;
+}
+.km-header > * { position: relative; z-index: 1; }
+.km-header-top {
+  display: flex; justify-content: space-between; align-items: flex-start;
+  margin-bottom: 24px;
+}
+.km-header-actions { display: flex; gap: 6px; }
+.km-icon-btn {
+  width: 36px; height: 36px;
+  background: var(--bg-surface);
+  border: 1.5px solid var(--border-strong);
+  border-radius: 0;
+  cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  color: var(--text-primary);
+  box-shadow: 2px 2px 0 0 var(--border-strong);
+  transition: transform 120ms var(--ease-ios), box-shadow 120ms var(--ease-ios);
+}
+.km-icon-btn:active {
+  transform: translate(2px, 2px);
+  box-shadow: 0 0 0 0 var(--border-strong);
+}
+
+.km-h1 {
+  font-family: var(--font-display);
+  font-weight: 900;
+  font-size: clamp(48px, 14vw, 72px);
+  line-height: 0.85;
+  letter-spacing: -0.045em;
+  margin: 8px 0 0;
+  display: flex; flex-direction: column;
+}
+.km-h1-italic {
+  font-family: var(--font-serif);
+  font-style: italic;
+  font-weight: 400;
+  font-size: clamp(36px, 11vw, 56px);
+  margin-top: -8px;
+  color: var(--coca-red);
+}
+
+.km-hero { margin-top: 8px; }
+.km-line {
+  display: inline-block; width: 18px; height: 1.5px;
+  background: var(--text-primary); margin-right: 8px;
+  vertical-align: middle;
+}
+.km-hero-value {
+  margin-top: 6px;
+  letter-spacing: -0.05em;
+}
+.km-hero-meta-row {
+  margin-top: 14px;
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+}
+.km-pill {
+  display: inline-flex; align-items: center;
+  padding: 5px 11px;
+  border: 1.5px solid var(--border-strong);
+  background: var(--bg-surface);
+  box-shadow: 2px 2px 0 0 var(--border-strong);
+}
+
+/* ─── BIG CURRENCY (Stripe/Wise) ───────────────────── */
+.km-big-currency {
+  display: inline-flex; align-items: baseline;
+  font-family: var(--font-display);
+  font-weight: 900;
+  letter-spacing: -0.05em;
+  line-height: 0.9;
+}
+.km-big-currency-symbol {
+  font-size: 0.32em; font-weight: 700;
+  color: var(--text-secondary);
+  margin-right: 0.18em;
+  align-self: flex-start;
+  margin-top: 0.18em;
+}
+.km-big-currency-int {
+  font-size: 1em;
+  color: var(--text-primary);
+}
+.km-big-currency-dec {
+  font-size: 0.42em; font-weight: 700;
+  color: var(--text-secondary);
+  margin-left: 0.04em;
+}
+.km-big-currency--hero { font-size: clamp(56px, 16vw, 96px); }
+.km-big-currency--xl { font-size: clamp(48px, 14vw, 80px); }
+.km-big-currency--md { font-size: clamp(36px, 10vw, 56px); }
+
+/* ─── WAVE ─────────────────────────────────────────── */
+.km-wave {
+  position: absolute; bottom: -1px; left: 0;
+  width: 100%; height: 56px;
+  display: block; z-index: 1;
+}
+
+/* ─── MAIN ─────────────────────────────────────────── */
+.km-main {
+  max-width: 448px;
+  margin: -28px auto 0;
+  padding: 0 16px 40px;
+  position: relative;
+  z-index: 5;
+}
+
+/* ─── ALERTS ────────────────────────────────────────── */
+.km-alert {
+  display: flex; align-items: center; gap: 10px;
+  padding: 11px 13px;
+  border: 1.5px solid var(--border-strong);
+  background: var(--bg-surface);
+  margin-bottom: 12px;
+  box-shadow: 3px 3px 0 0 var(--border-strong);
+  font-size: 13px;
+  font-weight: 500;
+}
+.km-alert p { margin: 0; flex: 1; line-height: 1.4; }
+.km-alert button {
+  background: none; border: none; cursor: pointer;
+  color: var(--text-primary);
+  padding: 2px;
+}
+.km-alert--err {
+  border-color: var(--coca-red);
+  box-shadow: 3px 3px 0 0 var(--coca-red);
+  color: var(--coca-red);
+}
+.km-alert--ok {
+  border-color: var(--text-primary);
+  background: var(--text-primary);
+  color: var(--bg-base);
+  box-shadow: 3px 3px 0 0 var(--coca-red);
+}
+.km-alert--ok .km-status-dot { background: var(--status-green); box-shadow: 0 0 8px var(--status-green); }
+
+/* ─── CARD (BRUTALIST) ─────────────────────────────── */
+.km-card {
+  background: var(--bg-surface);
+  border: 1.5px solid var(--border-strong);
+  border-radius: 0;
+  padding: 18px;
+  margin-bottom: 14px;
+  box-shadow: 4px 4px 0 0 var(--border-strong);
+  position: relative;
+}
+.km-card-head {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-bottom: 14px;
+}
+.km-card-head--bordered {
+  padding-bottom: 12px;
+  border-bottom: 1.5px solid var(--border-default);
+}
+.km-row-tight { display: flex; align-items: center; gap: 8px; }
+.km-redbar {
+  display: inline-block; width: 4px; height: 22px;
+  background: var(--coca-red);
+}
+
+.km-h2 {
+  font-family: var(--font-display);
+  font-weight: 800;
+  font-size: 22px;
+  letter-spacing: -0.035em;
+  line-height: 1;
+  margin: 0;
+}
+
+/* ─── MONO LABELS ──────────────────────────────────── */
+.km-mono {
+  font-family: var(--font-mono);
+  font-weight: 500;
+}
+.km-mono-label {
+  font-size: 10.5px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--text-primary);
+  font-weight: 600;
+  display: inline-flex; align-items: center; gap: 6px;
+}
+.km-mono-tiny {
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+.km-muted { color: var(--text-muted); }
+.km-coca { color: var(--coca-red); font-weight: 700; }
+.km-italic { font-style: italic; }
+.km-serif { font-family: var(--font-serif); }
+
+/* ─── FIELDS ───────────────────────────────────────── */
+.km-field { margin-bottom: 12px; }
+.km-field-head {
+  display: flex; justify-content: space-between; align-items: center;
+  margin-bottom: 8px;
+}
+.km-textbtn {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  color: var(--text-muted);
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 2px 4px;
+  font-weight: 500;
+}
+.km-textarea {
+  width: 100%;
+  padding: 11px 13px;
+  font-size: 14px;
+  font-family: var(--font-body);
+  color: var(--text-primary);
+  background: var(--bg-base);
+  border: 1.5px solid var(--border-default);
+  border-radius: 0;
+  resize: none;
+  outline: none;
+  line-height: 1.45;
+  font-weight: 500;
+  transition: border-color 120ms var(--ease-ios);
+  box-sizing: border-box;
+}
+.km-textarea:focus { border-color: var(--coca-red); }
+.km-dot {
+  display: inline-block; width: 9px; height: 9px;
+  flex-shrink: 0;
+}
+.km-dot--red {
+  background: radial-gradient(circle at 30% 30%, var(--coca-red), var(--coca-red-active));
+  border-radius: 50%;
+  box-shadow: 0 0 0 3px var(--coca-red-soft);
+}
+
+/* ─── BUTTONS ──────────────────────────────────────── */
+.km-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  gap: 8px;
+  padding: 11px 14px;
+  border: 1.5px solid var(--border-strong);
+  border-radius: 0;
+  cursor: pointer;
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 12px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  background: var(--bg-surface);
+  color: var(--text-primary);
+  box-shadow: 3px 3px 0 0 var(--border-strong);
+  transition: transform 120ms var(--ease-ios), box-shadow 120ms var(--ease-ios);
+}
+.km-btn:active:not(:disabled) {
+  transform: translate(3px, 3px);
+  box-shadow: 0 0 0 0 var(--border-strong);
+}
+.km-btn:disabled {
+  opacity: 0.45; cursor: not-allowed;
+  box-shadow: 0 0 0 0 var(--border-strong);
+}
+.km-btn--block { width: 100%; margin-top: 8px; }
+.km-btn--small { padding: 8px 12px; font-size: 11px; }
+.km-btn--red {
+  background: var(--coca-red);
+  color: #FFF;
+  border-color: var(--border-strong);
+}
+.km-btn--ink {
+  background: var(--text-primary);
+  color: var(--bg-base);
+}
+.km-btn--save {
+  background: var(--coca-red);
+  color: #FFF;
+  font-size: 14px;
+  padding: 14px;
+  margin-top: 12px;
+  border: 2px solid var(--border-strong);
+  box-shadow: 5px 5px 0 0 var(--border-strong);
+  letter-spacing: 0.08em;
+}
+.km-btn--save:active:not(:disabled) {
+  transform: translate(5px, 5px);
+}
+
+/* ─── CONNECTOR ────────────────────────────────────── */
+.km-connector {
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 0;
+  color: var(--text-muted);
+}
+.km-dashed {
+  flex: 1; height: 1px;
+  background: repeating-linear-gradient(90deg, var(--border-default) 0 4px, transparent 4px 8px);
+}
+
+/* ─── ODOMETER (DARK BRUTALIST) ────────────────────── */
+.km-odometer {
+  background: var(--bg-dark);
+  border: 1.5px solid var(--border-strong);
+  padding: 16px 18px;
+  margin: 14px 0 12px;
+  display: flex; align-items: center; justify-content: space-between;
+  position: relative; overflow: hidden;
+  box-shadow: 4px 4px 0 0 var(--coca-red);
+}
+.km-odometer-glow {
+  position: absolute; top: -40px; right: -40px;
+  width: 140px; height: 140px;
+  border-radius: 50%;
+  background: radial-gradient(circle, var(--coca-red-glow), transparent 70%);
+  pointer-events: none;
+}
+.km-odometer-grid {
+  position: absolute; inset: 0;
+  background-image: linear-gradient(rgba(255,255,255,0.06) 1px, transparent 1px);
+  background-size: 100% 12px;
+  pointer-events: none;
+}
+.km-odometer-info { position: relative; z-index: 2; }
+.km-odometer-label {
+  color: rgba(255,255,255,0.6);
+  letter-spacing: 0.22em;
+}
+.km-odometer-money {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--coca-red);
+  font-weight: 600;
+  margin-top: 4px;
+  letter-spacing: 0.04em;
+}
+.km-odometer-sublabel {
+  color: rgba(255,255,255,0.4);
+  margin-top: 3px;
+  font-style: italic;
+}
+.km-odometer-display { position: relative; z-index: 2; }
+.km-odometer-num {
+  display: flex; align-items: baseline; gap: 6px;
+  font-family: var(--font-mono);
+  font-weight: 700;
+  font-size: 36px;
+  color: #FFF;
+  line-height: 1;
+  letter-spacing: -0.02em;
+  text-shadow: 0 0 18px var(--coca-red-glow);
+}
+.km-odometer-unit {
+  font-family: var(--font-display);
+  font-size: 14px;
+  color: var(--coca-red);
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  font-style: italic;
+}
+.km-odometer-empty {
+  font-family: var(--font-mono);
+  font-size: 28px;
+  color: rgba(255,255,255,0.22);
+  font-weight: 500;
+}
+
+/* ─── TABS ─────────────────────────────────────────── */
+.km-tabs {
+  display: flex;
+  background: var(--bg-surface);
+  border: 1.5px solid var(--border-strong);
+  margin-bottom: 14px;
+  box-shadow: 3px 3px 0 0 var(--border-strong);
+  position: relative;
+  z-index: 1;
+}
+.km-tab {
+  flex: 1;
+  padding: 11px 13px;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 11.5px;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+  display: flex; align-items: center; justify-content: center; gap: 6px;
+  transition: all 200ms var(--ease-ios);
+  border-right: 1.5px solid var(--border-strong);
+  text-transform: uppercase;
+}
+.km-tab:last-child { border-right: none; }
+.km-tab--active {
+  background: var(--text-primary);
+  color: var(--bg-base);
+}
+
+.km-tabcontent { animation: fadeUp 0.35s var(--ease-ios) both; }
+
+/* ─── HISTORY LIST ──────────────────────────────────── */
+.km-trip-list { list-style: none; padding: 0; margin: 0; }
+.km-trip {
+  padding: 14px 0 10px;
+  border-bottom: 1px solid var(--border-default);
+}
+.km-trip:first-child { padding-top: 4px; }
+.km-trip:last-child { border-bottom: 2px solid var(--border-strong); padding-bottom: 14px; }
+.km-trip-head {
+  display: flex; justify-content: space-between; align-items: flex-start;
+  margin-bottom: 9px;
+}
+.km-trip-head-right { display: flex; align-items: center; gap: 8px; }
+.km-trip-km {
+  display: flex; flex-direction: column; align-items: flex-end;
+  gap: 3px;
+}
+.km-trip-km-pill {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 700;
+  background: var(--coca-red);
+  color: #FFF;
+  padding: 3px 9px;
+  letter-spacing: 0.04em;
+  border: 1.5px solid var(--border-strong);
+  box-shadow: 2px 2px 0 0 var(--border-strong);
+}
+.km-trip-km-money {
+  color: var(--status-green);
+  font-weight: 600;
+}
+.km-icon-btn-tiny {
+  background: none; border: none; cursor: pointer;
+  color: var(--text-muted);
+  padding: 3px;
+  display: flex;
+}
+.km-icon-btn-tiny:hover { color: var(--coca-red); }
+.km-trip-body {
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+.km-trip-line {
+  display: flex; gap: 10px; align-items: flex-start;
+}
+.km-trip-line span:first-child { margin-top: 5px; }
+.km-trip-vline {
+  margin-left: 3.5px;
+  height: 11px; width: 1px;
+  background: var(--border-default);
+  margin-top: 1px; margin-bottom: 1px;
+}
+.km-trip-flag { margin-top: 4px; flex-shrink: 0; color: var(--text-primary); }
+
+/* ─── MINI MAP ──────────────────────────────────────── */
+.km-minimap {
+  position: relative;
+  margin-top: 10px;
+  border: 1.5px solid var(--border-strong);
+  background: var(--bg-elevated);
+  overflow: hidden;
+}
+.km-minimap svg {
+  display: block;
+  width: 100%;
+  height: 100px;
+}
+.km-minimap-label {
+  position: absolute; top: 6px; left: 8px; right: 8px;
+  display: flex; justify-content: space-between;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 0.14em;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  pointer-events: none;
+}
+.km-mini-empty {
+  margin-top: 10px;
+  height: 78px;
+  background: repeating-linear-gradient(45deg, var(--bg-elevated), var(--bg-elevated) 8px, var(--bg-overlay) 8px, var(--bg-overlay) 16px);
+  display: flex; align-items: center; justify-content: center;
+  border: 1.5px dashed var(--border-default);
+}
+.km-mini-empty span {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-muted);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+.km-route-dash {
+  stroke-dasharray: 200;
+  animation: routeDash 1.4s var(--ease-out-expo) forwards;
+}
+
+/* ─── DASHBOARD ────────────────────────────────────── */
+.km-dash { display: block; }
+.km-card--hero {
+  background: var(--bg-surface);
+  position: relative;
+  overflow: hidden;
+}
+.km-aurora {
+  position: absolute; top: -40px; right: -30px;
+  width: 200px; height: 200px;
+  background: radial-gradient(circle, var(--coca-red-glow), transparent 70%);
+  pointer-events: none;
+}
+.km-card--hero > * { position: relative; z-index: 1; }
+.km-hero-amount {
+  margin: 12px 0 14px;
+  display: flex;
+  letter-spacing: -0.05em;
+}
+.km-hero-meta {
+  display: flex; align-items: center; gap: 10px;
+  flex-wrap: wrap;
+  font-size: 11.5px;
+  color: var(--text-secondary);
+}
+.km-divider-vert {
+  display: inline-block; width: 1px; height: 12px;
+  background: var(--border-default);
+}
+.km-hero-spark {
+  margin-top: 14px;
+  display: flex; align-items: center; gap: 10px;
+}
+.km-sparkline {
+  flex: 1; height: 32px;
+  width: 100%;
+}
+
+.km-card--projection {
+  background: var(--bg-elevated);
+}
+.km-projection-content {
+  margin-top: 8px;
+  display: flex; justify-content: flex-start;
+}
+.km-mt-1 { margin-top: 4px; }
+
+.km-card--rings { padding-bottom: 24px; }
+.km-rings {
+  display: flex; align-items: center; gap: 18px;
+  margin-top: 14px;
+}
+.km-rings svg { flex-shrink: 0; }
+.km-rings-legend {
+  flex: 1;
+  display: flex; flex-direction: column; gap: 8px;
+}
+.km-rings-legend-row {
+  display: flex; align-items: center; gap: 8px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+.km-rings-dot {
+  width: 8px; height: 8px;
+  border-radius: 50%;
+}
+.km-rings-legend-label {
+  flex: 1;
+  letter-spacing: 0.12em;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+}
+.km-rings-legend-pct {
+  font-weight: 700;
+  color: var(--text-primary);
+  letter-spacing: 0.04em;
+}
+
+.km-stats-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0;
+  border: 1.5px solid var(--border-strong);
+  background: var(--bg-surface);
+  margin-bottom: 14px;
+  box-shadow: 4px 4px 0 0 var(--border-strong);
+}
+.km-stat-tile {
+  padding: 16px 14px;
+  display: flex; flex-direction: column; gap: 4px;
+  border-right: 1.5px solid var(--border-default);
+}
+.km-stat-tile:last-child { border-right: none; }
+.km-stat-num {
+  font-family: var(--font-display);
+  font-weight: 900;
+  font-size: 36px;
+  letter-spacing: -0.04em;
+  line-height: 1;
+  margin: 4px 0 2px;
+}
+
+.km-pullquote {
+  margin: 18px 0;
+  padding-left: 14px;
+  border-left: 2px solid var(--coca-red);
+}
+.km-pullquote p {
+  font-size: 22px;
+  line-height: 1.2;
+  margin: 0 0 6px;
+  font-weight: 400;
+  color: var(--text-primary);
+}
+.km-pullquote-data {
+  font-style: normal;
+  font-weight: 700;
+  color: var(--coca-red);
+  letter-spacing: 0.02em;
+}
+.km-pullquote cite {
+  font-style: normal;
+  color: var(--text-muted);
+}
+
+/* ─── ROWS (BY DAY / BY MONTH) ─────────────────────── */
+.km-rows, .km-month-rows {
+  list-style: none; padding: 0; margin: 0;
+}
+.km-row {
+  padding: 12px 0 10px;
+  border-bottom: 1px solid var(--border-default);
+}
+.km-row:first-child { padding-top: 0; }
+.km-row:last-child { border-bottom: 2px solid var(--border-strong); padding-bottom: 12px; }
+.km-row-main {
+  display: flex; justify-content: space-between; align-items: flex-start;
+  margin-bottom: 7px;
+}
+.km-row-date { font-size: 12px; font-weight: 700; letter-spacing: 0.1em; }
+.km-row-right { text-align: right; }
+.km-row-km {
+  font-size: 13px; font-weight: 700;
+  letter-spacing: 0.02em;
+}
+.km-row-money {
+  font-family: var(--font-display);
+  font-style: italic;
+  font-weight: 800;
+  font-size: 13px;
+  color: var(--coca-red);
+  margin-top: 2px;
+}
+.km-bar {
+  height: 4px;
+  background: var(--bg-elevated);
+  position: relative;
+  overflow: hidden;
+}
+.km-bar-fill {
+  height: 100%;
+  background: var(--coca-red);
+  transition: width 0.6s var(--ease-out-expo);
+}
+
+.km-month-row {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--border-default);
+}
+.km-month-row:first-child { padding-top: 4px; }
+.km-month-row:last-child { border-bottom: 2px solid var(--border-strong); }
+.km-month-title {
+  font-family: var(--font-display);
+  font-weight: 800;
+  font-size: 18px;
+  letter-spacing: -0.02em;
+}
+.km-month-money {
+  font-family: var(--font-display);
+  font-style: italic;
+  font-weight: 800;
+  font-size: 18px;
+  color: var(--coca-red);
+  letter-spacing: -0.01em;
+}
+
+.km-empty {
+  font-size: 12.5px;
+  color: var(--text-muted);
+  font-style: italic;
+  text-align: center;
+  padding: 18px 0;
+  margin: 0;
+  font-family: var(--font-serif);
+}
+
+.km-pill-dark {
+  background: var(--text-primary);
+  color: var(--bg-base);
+  padding: 3px 8px;
+  font-weight: 600;
+}
+
+/* ─── MARQUEE ───────────────────────────────────────── */
+.km-marquee {
+  margin-top: 28px;
+  border-top: 2px solid var(--border-strong);
+  border-bottom: 2px solid var(--border-strong);
+  background: var(--bg-dark);
+  color: #FFF;
+  overflow: hidden;
+  padding: 8px 0;
+}
+.km-marquee-track {
+  display: flex;
+  white-space: nowrap;
+  animation: marquee 32s linear infinite;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  font-weight: 500;
+}
+.km-marquee-track span {
+  flex-shrink: 0;
+  padding-right: 0;
+  color: rgba(255,255,255,0.85);
+}
+@media (prefers-reduced-motion: reduce) {
+  .km-marquee-track { animation: none; }
+}
+
+/* ─── FOOTER ────────────────────────────────────────── */
+.km-footer {
+  text-align: center;
+  margin-top: 22px;
+}
+.km-footer p {
+  margin: 0;
+  font-size: 9.5px;
+  line-height: 1.7;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  font-family: var(--font-mono);
+  color: var(--text-muted);
+  font-weight: 500;
+}
+
+/* ─── VIEW TRANSITIONS ─────────────────────────────── */
+@view-transition { navigation: auto; }
+
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation-duration: 0.4s;
+  animation-timing-function: cubic-bezier(0.32, 0.72, 0, 1);
+}
+`;

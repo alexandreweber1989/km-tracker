@@ -2,21 +2,42 @@
 <html lang="pt-BR">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-    <title>Controle de KM</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+    <title>Drive Log · Controle de KM</title>
+
+    <!-- ANTI-FOUC: aplica tema antes de qualquer renderização -->
+    <script>
+      (function() {
+        try {
+          var stored = localStorage.getItem('coca_theme');
+          var system = matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+          var theme = (stored === 'dark' || stored === 'light') ? stored : system;
+          document.documentElement.setAttribute('data-theme', theme);
+          document.documentElement.style.colorScheme = theme;
+          // Background imediato evita flash branco em dark
+          document.documentElement.style.background = theme === 'dark' ? '#0A0A0A' : '#FAFAFA';
+        } catch (e) {}
+      })();
+    </script>
 
     <!-- PWA -->
     <link rel="manifest" href="/manifest.json" />
-    <meta name="theme-color" content="#E61A27" />
+    <meta name="theme-color" content="#FAFAFA" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#0A0A0A" media="(prefers-color-scheme: dark)" />
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-    <meta name="apple-mobile-web-app-title" content="KM Tracker" />
+    <meta name="apple-mobile-web-app-title" content="Drive Log" />
+    <meta name="description" content="Controle de quilometragem rodada — Drive Log" />
 
-    <!-- Favicon SVG vermelho -->
+    <!-- Preconnect para fontes (perf) -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+
+    <!-- Favicon SVG -->
     <link rel="icon" type="image/svg+xml" href="/icon.svg" />
   </head>
-  <body style="margin:0;padding:0;background:#F4F1ED;">
+  <body>
     <div id="root"></div>
     <script type="module" src="/src/main.jsx"></script>
   </body>
