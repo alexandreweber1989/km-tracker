@@ -581,6 +581,12 @@ export default function KmTracker() {
   const [routeGeometry, setRouteGeometry] = useState(null);
   const [trips, setTrips] = useState([]);
   const [loading, setLoading] = useState({ origin: false, destination: false, distance: false });
+  const [originSuggestions, setOriginSuggestions] = useState([]);
+  const [destSuggestions, setDestSuggestions] = useState([]);
+  const [showOriginDrop, setShowOriginDrop] = useState(false);
+  const [showDestDrop, setShowDestDrop] = useState(false);
+  const originDebounce = useRef(null);
+  const destDebounce = useRef(null);
   const [error, setError] = useState(null);
   const [success, setSuccess] = useState(null);
   const [activeTab, setActiveTab] = useState('history');
@@ -709,6 +715,57 @@ export default function KmTracker() {
   function clearLocation(which) {
     feedback('tap');
     (which === 'origin' ? setOrigin : setDestination)({ address: '', lat: null, lng: null });
+    if (which === 'origin') { setOriginSuggestions([]); setShowOriginDrop(false); }
+    else { setDestSuggestions([]); setShowDestDrop(false); }
+  }
+
+  async function searchAddress(query, which) {
+    if (query.length < 3) {
+      if (which === 'origin') { setOriginSuggestions([]); setShowOriginDrop(false); }
+      else { setDestSuggestions([]); setShowDestDrop(false); }
+      return;
+    }
+    const typedNum = query.match(/[\s,]+(\d{1,5})(?:\s*[-,]|\s*$)/);
+    const num = typedNum ? typedNum[1] : null;
+    try {
+      const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(query)}&format=json&addressdetails=1&accept-language=pt-BR&countrycodes=br&limit=5`;
+      const r = await fetch(url);
+      if (!r.ok) return;
+      const list = await r.json();
+      const results = list.map(item => {
+        const a = item.address || {};
+        const street = a.road || a.pedestrian || a.path || '';
+        const houseNum = a.house_number || num || '';
+        const neighborhood = a.suburb || a.neighbourhood || a.quarter || a.city_district || '';
+        const city = a.city || a.town || a.village || a.municipality || '';
+        const stateAbbr = STATE_MAP[a.state || ''] || a.state || '';
+        let label = street;
+        if (houseNum) label += `, ${houseNum}`;
+        if (neighborhood) label += ` - ${neighborhood}`;
+        if (city) label += `, ${city}`;
+        if (stateAbbr) label += ` - ${stateAbbr}`;
+        return { label: label || item.display_name, lat: parseFloat(item.lat), lng: parseFloat(item.lon), refineNum: num && !a.house_number ? num : null };
+      });
+      if (which === 'origin') { setOriginSuggestions(results); setShowOriginDrop(results.length > 0); }
+      else { setDestSuggestions(results); setShowDestDrop(results.length > 0); }
+    } catch {}
+  }
+
+  function handleAddressInput(e, which) {
+    const val = e.target.value;
+    const setter = which === 'origin' ? setOrigin : setDestination;
+    setter(prev => ({ ...prev, address: val, lat: null, lng: null }));
+    const debRef = which === 'origin' ? originDebounce : destDebounce;
+    clearTimeout(debRef.current);
+    debRef.current = setTimeout(() => searchAddress(val, which), 400);
+  }
+
+  function selectSuggestion(item, which) {
+    const setter = which === 'origin' ? setOrigin : setDestination;
+    setter({ address: item.label, lat: item.lat, lng: item.lng });
+    if (which === 'origin') { setOriginSuggestions([]); setShowOriginDrop(false); }
+    else { setDestSuggestions([]); setShowDestDrop(false); }
+    feedback('tap');
   }
 
   function handleSave() {
@@ -898,7 +955,16 @@ export default function KmTracker() {
                 <button onClick={() => clearLocation('origin')} className="km-textbtn">CLEAR</button>
               )}
             </div>
-            <textarea value={origin.address} onChange={e => setOrigin({...origin, address:e.target.value})} placeholder="Endereço de partida" rows={2} className="km-textarea" />
+            <div className="km-autocomplete">
+              <textarea value={origin.address} onChange={e => handleAddressInput(e, 'origin')} onFocus={() => originSuggestions.length > 0 && setShowOriginDrop(true)} onBlur={() => setTimeout(() => setShowOriginDrop(false), 200)} placeholder="Digite o endereço de partida" rows={2} className="km-textarea" />
+              {showOriginDrop && originSuggestions.length > 0 && (
+                <ul className="km-suggestions">
+                  {originSuggestions.map((s, i) => (
+                    <li key={i} onMouseDown={() => selectSuggestion(s, 'origin')} className="km-suggestion-item">{s.label}</li>
+                  ))}
+                </ul>
+              )}
+            </div>
             <button onClick={() => capture('origin')} disabled={loading.origin} className="km-btn km-btn--red km-btn--block km-press">
               {loading.origin ? <><Loader2 size={15} className="km-spin" /> BUSCANDO…</> : <><MapPin size={15} strokeWidth={2.4} /> CAPTURAR LOCALIZAÇÃO</>}
             </button>
@@ -922,7 +988,16 @@ export default function KmTracker() {
                 <button onClick={() => clearLocation('destination')} className="km-textbtn">CLEAR</button>
               )}
             </div>
-            <textarea value={destination.address} onChange={e => setDestination({...destination, address:e.target.value})} placeholder="Endereço de chegada" rows={2} className="km-textarea" />
+            <div className="km-autocomplete">
+              <textarea value={destination.address} onChange={e => handleAddressInput(e, 'destination')} onFocus={() => destSuggestions.length > 0 && setShowDestDrop(true)} onBlur={() => setTimeout(() => setShowDestDrop(false), 200)} placeholder="Digite o endereço de chegada" rows={2} className="km-textarea" />
+              {showDestDrop && destSuggestions.length > 0 && (
+                <ul className="km-suggestions">
+                  {destSuggestions.map((s, i) => (
+                    <li key={i} onMouseDown={() => selectSuggestion(s, 'destination')} className="km-suggestion-item">{s.label}</li>
+                  ))}
+                </ul>
+              )}
+            </div>
             <button onClick={() => capture('destination')} disabled={loading.destination} className="km-btn km-btn--ink km-btn--block km-press">
               {loading.destination ? <><Loader2 size={15} className="km-spin" /> BUSCANDO…</> : <><Flag size={15} strokeWidth={2.4} /> CAPTURAR LOCALIZAÇÃO</>}
             </button>
@@ -1463,6 +1538,22 @@ body {
   box-sizing: border-box;
 }
 .km-textarea:focus { border-color: var(--coca-red); }
+.km-autocomplete { position: relative; }
+.km-suggestions {
+  position: absolute; top: 100%; left: 0; right: 0; z-index: 50;
+  background: var(--bg-surface); border: 1.5px solid var(--border-strong);
+  border-top: none; list-style: none; margin: 0; padding: 0;
+  max-height: 200px; overflow-y: auto;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+}
+.km-suggestion-item {
+  padding: 10px 13px; font-size: 13px; font-family: var(--font-body);
+  color: var(--text-primary); cursor: pointer;
+  border-bottom: 1px solid var(--border-subtle);
+  line-height: 1.35;
+}
+.km-suggestion-item:last-child { border-bottom: none; }
+.km-suggestion-item:hover { background: var(--bg-base); color: var(--coca-red); }
 .km-dot {
   display: inline-block; width: 9px; height: 9px;
   flex-shrink: 0;
