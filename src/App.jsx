@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { jsPDF } from 'jspdf';
 import { autoCropDocument } from './WarpHelper.js';
-import { MapPin, Flag, Save, Download, Trash2, Loader2, AlertCircle, X, Navigation, ChevronDown, ChevronUp, ArrowDown, DollarSign, Calendar, TrendingUp, History, Sun, Moon, Volume2, VolumeX, Vibrate, Camera, Settings, Receipt, ParkingCircle, Eye, Check, Image as ImageIcon, FileText, Aperture } from 'lucide-react';
+import { MapPin, Flag, Save, Download, Trash2, Loader2, AlertCircle, X, Navigation, ChevronDown, ChevronUp, ArrowDown, DollarSign, Calendar, TrendingUp, History, Sun, Moon, Volume2, VolumeX, Vibrate, Camera, Settings, Receipt, ParkingCircle, Eye, Check, Image as ImageIcon, FileText, Aperture, Pencil } from 'lucide-react';
 import * as XLSX from 'xlsx';
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -38,6 +38,20 @@ function distMeters(lat1, lon1, lat2, lon2) {
   return 2 * R * Math.asin(Math.sqrt(a));
 }
 function haversineKm(lat1, lon1, lat2, lon2) { return distMeters(lat1,lon1,lat2,lon2) / 1000; }
+
+async function geocodeAddress(address) {
+  const q = encodeURIComponent(address);
+  const url = `https://nominatim.openstreetmap.org/search?q=${q}&format=json&accept-language=pt-BR&limit=1&countrycodes=br`;
+  try {
+    const r = await fetch(url);
+    if (!r.ok) return null;
+    const list = await r.json();
+    if (list.length > 0) {
+      return { lat: parseFloat(list[0].lat), lng: parseFloat(list[0].lon) };
+    }
+    return null;
+  } catch { return null; }
+}
 
 function formatBrazilianAddress(data, overrideNumber, isApprox) {
   const a = data.address || {};
@@ -785,6 +799,12 @@ export default function KmTracker() {
   const initialized = useRef(false);
   const feedback = useFeedback();
 
+  // ─── EDIT TRIP STATE ────────────────────────────────────────────────────
+  const [editingTripId, setEditingTripId] = useState(null);
+  const [editOrigin, setEditOrigin] = useState('');
+  const [editDestination, setEditDestination] = useState('');
+  const [editLoading, setEditLoading] = useState(false);
+
   // ─── INIT: theme, sound prefs, splash ──────────────────────────────────
   useEffect(() => {
     setThemeState(getInitialTheme());
@@ -935,7 +955,85 @@ export default function KmTracker() {
   function deleteTrip(id) {
     if (window.confirm('Remover esta viagem?')) {
       setTrips(prev => prev.filter(t => t.id !== id));
+      if (editingTripId === id) setEditingTripId(null);
       feedback('swoosh');
+    }
+  }
+
+  // ─── EDIT TRIP HANDLERS ─────────────────────────────────────────────────
+  function startEditTrip(trip) {
+    setEditingTripId(trip.id);
+    setEditOrigin(trip.origin);
+    setEditDestination(trip.destination);
+    feedback('tap');
+  }
+
+  function cancelEditTrip() {
+    setEditingTripId(null);
+    setEditOrigin('');
+    setEditDestination('');
+    feedback('tap');
+  }
+
+  async function saveEditTrip() {
+    if (!editOrigin.trim() || !editDestination.trim()) {
+      setError('Preencha origem e destino'); feedback('error'); return;
+    }
+    setEditLoading(true);
+    setTopLoading(true);
+    feedback('tap');
+    try {
+      // Geocode origin
+      const originGeo = await geocodeAddress(editOrigin.trim());
+      // Geocode destination
+      const destGeo = await geocodeAddress(editDestination.trim());
+
+      let km = null;
+      let kmLabel = '';
+      let geometry = null;
+
+      if (originGeo && destGeo) {
+        // Try OSRM route
+        try {
+          const r = await fetch(`https://router.project-osrm.org/route/v1/driving/${originGeo.lng},${originGeo.lat};${destGeo.lng},${destGeo.lat}?overview=simplified&geometries=geojson`);
+          const data = await r.json();
+          if (data.routes?.length > 0) {
+            km = Number((data.routes[0].distance / 1000).toFixed(2));
+            kmLabel = 'rota de carro';
+            geometry = data.routes[0].geometry?.coordinates || null;
+          }
+        } catch {}
+
+        if (km == null) {
+          km = Number(haversineKm(originGeo.lat, originGeo.lng, destGeo.lat, destGeo.lng).toFixed(2));
+          kmLabel = 'linha reta · rota indisponível';
+          geometry = [[originGeo.lng, originGeo.lat], [destGeo.lng, destGeo.lat]];
+        }
+      }
+
+      setTrips(prev => prev.map(t => {
+        if (t.id !== editingTripId) return t;
+        return {
+          ...t,
+          origin: editOrigin.trim(),
+          destination: editDestination.trim(),
+          km,
+          kmLabel,
+          geometry,
+        };
+      }));
+
+      setEditingTripId(null);
+      setEditOrigin('');
+      setEditDestination('');
+      setSuccess('Viagem atualizada!'); setTimeout(() => setSuccess(null), 2200);
+      feedback('success');
+    } catch (e) {
+      setError(e.message || 'Erro ao recalcular rota');
+      feedback('error');
+    } finally {
+      setEditLoading(false);
+      setTopLoading(false);
     }
   }
 
@@ -1634,7 +1732,9 @@ export default function KmTracker() {
                 <p className="km-empty">Nenhuma viagem registrada ainda.</p>
               ) : (
                 <ul className="km-trip-list">
-                  {trips.map((trip, idx) => (
+                  {trips.map((trip, idx) => {
+                    const isEditing = editingTripId === trip.id;
+                    return (
                     <li key={trip.id} className="km-trip">
                       <div className="km-trip-head">
                         <span className="km-mono km-mono-tiny">
@@ -1649,23 +1749,52 @@ export default function KmTracker() {
                           ) : (
                             <span className="km-mono km-mono-tiny km-muted km-italic">SEM MEDIÇÃO</span>
                           )}
+                          {!isEditing && <button onClick={() => startEditTrip(trip)} className="km-icon-btn-tiny" title="Editar"><Pencil size={13} /></button>}
                           <button onClick={() => deleteTrip(trip.id)} className="km-icon-btn-tiny"><Trash2 size={13} /></button>
                         </div>
                       </div>
-                      <div className="km-trip-body">
-                        <div className="km-trip-line">
-                          <span className="km-dot km-dot--red" />
-                          <span>{trip.origin}</span>
+                      {isEditing ? (
+                        <div className="km-trip-edit-body">
+                          <div className="km-field" style={{ marginBottom: 8 }}>
+                            <label className="km-mono km-mono-label" style={{ marginBottom: 4, display: 'block' }}>
+                              <span className="km-dot km-dot--red" /> ORIGEM
+                            </label>
+                            <textarea value={editOrigin} onChange={e => setEditOrigin(e.target.value)} rows={2} className="km-textarea" />
+                          </div>
+                          <div className="km-field" style={{ marginBottom: 8 }}>
+                            <label className="km-mono km-mono-label" style={{ marginBottom: 4, display: 'block' }}>
+                              <Flag size={11} fill="currentColor" strokeWidth={2.4} /> DESTINO
+                            </label>
+                            <textarea value={editDestination} onChange={e => setEditDestination(e.target.value)} rows={2} className="km-textarea" />
+                          </div>
+                          <div style={{ display: 'flex', gap: '8px' }}>
+                            <button onClick={saveEditTrip} disabled={editLoading} className="km-btn km-btn--save km-btn--block km-press">
+                              {editLoading ? <><Loader2 size={14} className="km-spin" /> RECALCULANDO…</> : <><Check size={14} /> SALVAR</>}
+                            </button>
+                            <button onClick={cancelEditTrip} className="km-btn km-btn--ink km-press" style={{ flex: '0 0 auto', padding: '10px 14px' }}>
+                              <X size={14} />
+                            </button>
+                          </div>
                         </div>
-                        <div className="km-trip-vline" />
-                        <div className="km-trip-line">
-                          <Flag size={11} fill="currentColor" strokeWidth={2.4} className="km-trip-flag" />
-                          <span>{trip.destination}</span>
-                        </div>
-                      </div>
-                      <MiniMap geometry={trip.geometry} />
+                      ) : (
+                        <>
+                          <div className="km-trip-body">
+                            <div className="km-trip-line">
+                              <span className="km-dot km-dot--red" />
+                              <span>{trip.origin}</span>
+                            </div>
+                            <div className="km-trip-vline" />
+                            <div className="km-trip-line">
+                              <Flag size={11} fill="currentColor" strokeWidth={2.4} className="km-trip-flag" />
+                              <span>{trip.destination}</span>
+                            </div>
+                          </div>
+                          <MiniMap geometry={trip.geometry} />
+                        </>
+                      )}
                     </li>
-                  ))}
+                    );
+                  })}
                 </ul>
               )}
             </section>
@@ -2985,5 +3114,18 @@ body {
 /* ─── ACTIVITY RINGS ENTRANCE ─────────────────────── */
 .km-rings svg circle {
   will-change: stroke-dashoffset;
+}
+
+/* ─── TRIP EDIT INLINE ───────────────────────────── */
+.km-trip-edit-body {
+  margin-top: 10px;
+  padding: 12px;
+  background: var(--bg-elevated);
+  border: 1.5px solid var(--coca-red);
+  box-shadow: 0 0 0 3px var(--coca-red-soft);
+  animation: fadeUp 0.25s var(--ease-ios) both;
+}
+.km-trip-edit-body .km-textarea {
+  font-size: 12px;
 }
 `;
