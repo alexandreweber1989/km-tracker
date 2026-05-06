@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
-import { MapPin, Flag, Save, Download, Trash2, Loader2, AlertCircle, X, Navigation, ChevronDown, ChevronUp, ArrowDown, DollarSign, Calendar, TrendingUp, History, Sun, Moon, Volume2, VolumeX, Vibrate } from 'lucide-react';
+import { MapPin, Flag, Save, Download, Trash2, Loader2, AlertCircle, X, Navigation, ChevronDown, ChevronUp, ArrowDown, DollarSign, Calendar, TrendingUp, History, Sun, Moon, Volume2, VolumeX, Vibrate, Camera, Settings, Receipt, ParkingCircle, Eye, Check, Image as ImageIcon } from 'lucide-react';
 import * as XLSX from 'xlsx';
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -104,8 +104,128 @@ const TRIPS_KEY = 'km_trips_v1';
 const THEME_KEY = 'coca_theme';
 const SOUND_KEY = 'coca_sound';
 const HAPTIC_KEY = 'coca_haptic';
+const GEMINI_KEY = 'gemini_api_key';
+const RECEIPTS_META_KEY = 'km_receipts_meta_v1';
 const loadTrips = () => { try { const r = localStorage.getItem(TRIPS_KEY); return r ? JSON.parse(r) : null; } catch { return null; } };
 const saveTrips = (t) => { try { localStorage.setItem(TRIPS_KEY, JSON.stringify(t)); } catch {} };
+const loadReceiptsMeta = () => { try { const r = localStorage.getItem(RECEIPTS_META_KEY); return r ? JSON.parse(r) : []; } catch { return []; } };
+const saveReceiptsMeta = (m) => { try { localStorage.setItem(RECEIPTS_META_KEY, JSON.stringify(m)); } catch {} };
+
+// ═══════════════════════════════════════════════════════════════════════════
+// INDEXED DB (for receipt images — localStorage can't hold large blobs)
+// ═══════════════════════════════════════════════════════════════════════════
+const DB_NAME = 'km_tracker_db';
+const DB_VERSION = 1;
+const STORE_NAME = 'receipt_images';
+
+function openReceiptDB() {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open(DB_NAME, DB_VERSION);
+    request.onupgradeneeded = () => {
+      const db = request.result;
+      if (!db.objectStoreNames.contains(STORE_NAME)) {
+        db.createObjectStore(STORE_NAME, { keyPath: 'id' });
+      }
+    };
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+}
+
+async function saveReceiptImage(id, blob) {
+  const db = await openReceiptDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE_NAME, 'readwrite');
+    tx.objectStore(STORE_NAME).put({ id, blob });
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+}
+
+async function getReceiptImage(id) {
+  const db = await openReceiptDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE_NAME, 'readonly');
+    const req = tx.objectStore(STORE_NAME).get(id);
+    req.onsuccess = () => resolve(req.result?.blob || null);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+async function deleteReceiptImage(id) {
+  const db = await openReceiptDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE_NAME, 'readwrite');
+    tx.objectStore(STORE_NAME).delete(id);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// GEMINI VISION API
+// ═══════════════════════════════════════════════════════════════════════════
+async function analyzeReceiptWithGemini(imageBase64, apiKey) {
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
+  const prompt = `Analise esta foto de um comprovante de pedágio ou estacionamento brasileiro.
+Extraia os seguintes dados em formato JSON puro (sem markdown, sem \`\`\`json):
+{
+  "tipo": "pedagio" ou "estacionamento",
+  "concessionaria": "nome da concessionária ou estabelecimento",
+  "cnpj": "CNPJ se visível ou null",
+  "dataHora": "DD/MM/AAAA HH:MM:SS",
+  "praca": "praça do pedágio ou local do estacionamento",
+  "via": "rodovia ou endereço",
+  "placa": "placa do veículo se visível ou null",
+  "classe": "classe do veículo se visível ou null",
+  "valor": 0.00,
+  "recibo": "número do recibo/DFE se visível ou null"
+}
+Se algum campo não estiver visível no documento, retorne null para esse campo.
+Retorne SOMENTE o JSON, sem explicações, sem formatação markdown.`;
+
+  const body = {
+    contents: [{
+      parts: [
+        { text: prompt },
+        { inline_data: { mime_type: 'image/jpeg', data: imageBase64 } }
+      ]
+    }]
+  };
+
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  });
+
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}));
+    throw new Error(err.error?.message || `Erro na API Gemini (${response.status})`);
+  }
+
+  const data = await response.json();
+  const text = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+  // Clean markdown code fences if present
+  const cleaned = text.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+  try {
+    return JSON.parse(cleaned);
+  } catch {
+    throw new Error('A IA não conseguiu extrair os dados. Tente tirar outra foto com melhor iluminação.');
+  }
+}
+
+function fileToBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const base64 = reader.result.split(',')[1];
+      resolve(base64);
+    };
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
 
 // ═══════════════════════════════════════════════════════════════════════════
 // FEEDBACK (sound + haptic)
@@ -591,6 +711,15 @@ export default function KmTracker() {
   const [splashExiting, setSplashExiting] = useState(false);
   const [splashGone, setSplashGone] = useState(false);
   const [topLoading, setTopLoading] = useState(false);
+  const [receipts, setReceipts] = useState([]);
+  const [expenseTab, setExpenseTab] = useState('pedagio');
+  const [scanning, setScanning] = useState(false);
+  const [showApiKeyModal, setShowApiKeyModal] = useState(false);
+  const [apiKeyInput, setApiKeyInput] = useState('');
+  const [pendingReceipt, setPendingReceipt] = useState(null); // {data, imageUrl, base64}
+  const [receiptPreviewId, setReceiptPreviewId] = useState(null);
+  const [receiptPreviewUrl, setReceiptPreviewUrl] = useState(null);
+  const fileInputRef = useRef(null);
   const initialized = useRef(false);
   const feedback = useFeedback();
 
@@ -624,8 +753,16 @@ export default function KmTracker() {
     else { setTrips(SEED_TRIPS); saveTrips(SEED_TRIPS); }
   }, []);
 
-  // Persist
+  // Load receipts
+  useEffect(() => {
+    setReceipts(loadReceiptsMeta());
+  }, []);
+
+  // Persist trips
   useEffect(() => { if (trips.length > 0 || loadTrips()) saveTrips(trips); }, [trips]);
+
+  // Persist receipts
+  useEffect(() => { saveReceiptsMeta(receipts); }, [receipts]);
 
   // Inject fonts + global CSS
   useEffect(() => {
@@ -740,6 +877,118 @@ export default function KmTracker() {
     }
   }
 
+  // ─── RECEIPT HANDLERS ──────────────────────────────────────────────────
+  async function handleReceiptPhoto(e) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const apiKey = localStorage.getItem(GEMINI_KEY);
+    if (!apiKey) {
+      setShowApiKeyModal(true);
+      return;
+    }
+    setScanning(true);
+    setError(null);
+    setTopLoading(true);
+    feedback('tap');
+    try {
+      const base64 = await fileToBase64(file);
+      const imageUrl = URL.createObjectURL(file);
+      const data = await analyzeReceiptWithGemini(base64, apiKey);
+      setPendingReceipt({ data, imageUrl, base64, blob: file });
+      feedback('success');
+    } catch (err) {
+      setError(err.message || 'Erro ao analisar comprovante');
+      feedback('error');
+    } finally {
+      setScanning(false);
+      setTopLoading(false);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    }
+  }
+
+  async function confirmReceipt() {
+    if (!pendingReceipt) return;
+    const id = 'r' + Date.now();
+    const meta = {
+      id,
+      ...pendingReceipt.data,
+      createdAt: new Date().toISOString(),
+    };
+    try {
+      await saveReceiptImage(id, pendingReceipt.blob);
+    } catch { /* IndexedDB fail — continue without image */ }
+    setReceipts(prev => [meta, ...prev]);
+    setPendingReceipt(null);
+    setSuccess('Comprovante salvo!');
+    setTimeout(() => setSuccess(null), 2200);
+    feedback('success');
+  }
+
+  function cancelReceipt() {
+    if (pendingReceipt?.imageUrl) URL.revokeObjectURL(pendingReceipt.imageUrl);
+    setPendingReceipt(null);
+  }
+
+  async function deleteReceipt(id) {
+    if (!window.confirm('Remover este comprovante?')) return;
+    try { await deleteReceiptImage(id); } catch {}
+    setReceipts(prev => prev.filter(r => r.id !== id));
+    feedback('swoosh');
+  }
+
+  async function downloadReceipt(id) {
+    try {
+      const blob = await getReceiptImage(id);
+      if (!blob) { setError('Imagem não encontrada'); return; }
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `comprovante_${id}.jpg`;
+      a.click();
+      URL.revokeObjectURL(url);
+      feedback('success');
+    } catch {
+      setError('Erro ao baixar comprovante');
+    }
+  }
+
+  async function viewReceipt(id) {
+    try {
+      const blob = await getReceiptImage(id);
+      if (!blob) { setError('Imagem não encontrada'); return; }
+      const url = URL.createObjectURL(blob);
+      setReceiptPreviewId(id);
+      setReceiptPreviewUrl(url);
+    } catch {
+      setError('Erro ao carregar imagem');
+    }
+  }
+
+  function closeReceiptPreview() {
+    if (receiptPreviewUrl) URL.revokeObjectURL(receiptPreviewUrl);
+    setReceiptPreviewId(null);
+    setReceiptPreviewUrl(null);
+  }
+
+  function handleSaveApiKey() {
+    if (!apiKeyInput.trim()) return;
+    localStorage.setItem(GEMINI_KEY, apiKeyInput.trim());
+    setShowApiKeyModal(false);
+    setApiKeyInput('');
+    setSuccess('API Key salva!');
+    setTimeout(() => setSuccess(null), 2200);
+    feedback('success');
+  }
+
+  function openScanWithApiCheck() {
+    const apiKey = localStorage.getItem(GEMINI_KEY);
+    if (!apiKey) {
+      setShowApiKeyModal(true);
+      return;
+    }
+    fileInputRef.current?.click();
+  }
+
   function exportToExcel() {
     if (!trips.length) { setError('Nenhuma viagem para exportar'); feedback('error'); return; }
     const sorted = [...trips].sort((a, b) => {
@@ -789,7 +1038,13 @@ export default function KmTracker() {
   const tripsWithKm = trips.filter(t => t.km != null).length;
   const canSave = origin.address.trim() && destination.address.trim();
 
-  const marqueeText = ' · DRIVE LOG · COCA-COLA BR · FROTA · ' + numFmt.format(totalKm) + ' KM · ' + brlFmt.format(totalEarning) + ' · ' + String(trips.length).padStart(3,'0') + ' VIAGENS';
+  const pedagios = receipts.filter(r => r.tipo === 'pedagio');
+  const estacionamentos = receipts.filter(r => r.tipo === 'estacionamento');
+  const totalPedagios = pedagios.reduce((s, r) => s + (r.valor || 0), 0);
+  const totalEstacionamentos = estacionamentos.reduce((s, r) => s + (r.valor || 0), 0);
+  const totalDespesas = totalPedagios + totalEstacionamentos;
+
+  const marqueeText = ' · DRIVE LOG · COCA-COLA BR · FROTA · ' + numFmt.format(totalKm) + ' KM · ' + brlFmt.format(totalEarning) + ' · ' + String(trips.length).padStart(3,'0') + ' VIAGENS' + (totalDespesas > 0 ? ' · ' + brlFmt.format(totalDespesas) + ' DESPESAS' : '');
 
   return (
     <div className="km-app" data-theme={theme}>
@@ -964,15 +1219,107 @@ export default function KmTracker() {
           <button onClick={() => handleTabSwitch('history')} className={`km-tab ${activeTab === 'history' ? 'km-tab--active' : ''}`}>
             <History size={14} strokeWidth={2.4} /> HISTÓRICO
           </button>
+          <button onClick={() => handleTabSwitch('expenses')} className={`km-tab ${activeTab === 'expenses' ? 'km-tab--active' : ''}`}>
+            <Receipt size={14} strokeWidth={2.4} /> DESPESAS
+          </button>
           <button onClick={() => handleTabSwitch('dashboard')} className={`km-tab ${activeTab === 'dashboard' ? 'km-tab--active' : ''}`}>
             <TrendingUp size={14} strokeWidth={2.4} /> DASHBOARD
           </button>
         </div>
 
+        {/* HIDDEN FILE INPUT FOR CAMERA */}
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept="image/*"
+          capture="environment"
+          onChange={handleReceiptPhoto}
+          style={{ display: 'none' }}
+        />
+
         {/* TAB CONTENT */}
         <div className="km-tabcontent" key={activeTab}>
           {activeTab === 'dashboard' ? (
             <Dashboard trips={trips} />
+          ) : activeTab === 'expenses' ? (
+            <div className="km-fade-up">
+              {/* EXPENSE SUB-TABS */}
+              <div className="km-expense-subtabs">
+                <button onClick={() => { setExpenseTab('pedagio'); feedback('tap'); }} className={`km-expense-subtab ${expenseTab === 'pedagio' ? 'km-expense-subtab--active' : ''}`}>
+                  <Receipt size={13} strokeWidth={2.4} /> PEDÁGIOS
+                  {pedagios.length > 0 && <span className="km-expense-badge">{pedagios.length}</span>}
+                </button>
+                <button onClick={() => { setExpenseTab('estacionamento'); feedback('tap'); }} className={`km-expense-subtab ${expenseTab === 'estacionamento' ? 'km-expense-subtab--active' : ''}`}>
+                  <ParkingCircle size={13} strokeWidth={2.4} /> ESTACIONAMENTOS
+                  {estacionamentos.length > 0 && <span className="km-expense-badge">{estacionamentos.length}</span>}
+                </button>
+              </div>
+
+              {/* SCAN BUTTON */}
+              <button onClick={openScanWithApiCheck} disabled={scanning} className="km-btn km-btn--red km-btn--block km-press" style={{ marginBottom: '14px' }}>
+                {scanning ? <><Loader2 size={16} className="km-spin" /> ANALISANDO COM IA…</> : <><Camera size={16} strokeWidth={2.4} /> ESCANEAR COMPROVANTE</>}
+              </button>
+
+              {/* API KEY CONFIG */}
+              <button onClick={() => { setApiKeyInput(localStorage.getItem(GEMINI_KEY) || ''); setShowApiKeyModal(true); }} className="km-textbtn" style={{ fontSize: '10px', marginBottom: '14px', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                <Settings size={11} /> CONFIGURAR API KEY
+              </button>
+
+              {/* TOTAL CARD */}
+              <section className="km-card" style={{ marginBottom: '14px' }}>
+                <header className="km-card-head">
+                  <span className="km-mono km-mono-label">◊ TOTAL A REEMBOLSAR · {expenseTab === 'pedagio' ? 'PEDÁGIOS' : 'ESTACIONAMENTOS'}</span>
+                </header>
+                <div style={{ marginTop: '8px' }}>
+                  <BigCurrency value={expenseTab === 'pedagio' ? totalPedagios : totalEstacionamentos} size="md" />
+                </div>
+                {totalDespesas > 0 && (
+                  <div className="km-mono km-mono-tiny km-muted" style={{ marginTop: '6px' }}>
+                    TOTAL GERAL (PED + EST): {brlFmt.format(totalDespesas)}
+                  </div>
+                )}
+              </section>
+
+              {/* RECEIPT LIST */}
+              <section className="km-card">
+                <header className="km-card-head km-card-head--bordered">
+                  <div className="km-row-tight">
+                    <span className="km-redbar" />
+                    <h2 className="km-h2">{expenseTab === 'pedagio' ? 'Pedágios' : 'Estacionamentos'}</h2>
+                    <span className="km-mono km-mono-tiny km-pill-dark">{String(expenseTab === 'pedagio' ? pedagios.length : estacionamentos.length).padStart(2,'0')}</span>
+                  </div>
+                </header>
+
+                {(expenseTab === 'pedagio' ? pedagios : estacionamentos).length === 0 ? (
+                  <p className="km-empty">Nenhum comprovante registrado. Escaneie um {expenseTab === 'pedagio' ? 'pedágio' : 'estacionamento'}.</p>
+                ) : (
+                  <ul className="km-trip-list">
+                    {(expenseTab === 'pedagio' ? pedagios : estacionamentos).map((r, idx) => (
+                      <li key={r.id} className="km-trip">
+                        <div className="km-trip-head">
+                          <span className="km-mono km-mono-tiny">
+                            #{String((expenseTab === 'pedagio' ? pedagios : estacionamentos).length - idx).padStart(3,'0')} <span className="km-muted">·</span> {r.dataHora || '—'}
+                          </span>
+                          <div className="km-trip-head-right">
+                            <span className="km-trip-km-pill">{brlFmt.format(r.valor || 0)}</span>
+                            <button onClick={() => viewReceipt(r.id)} className="km-icon-btn-tiny"><Eye size={13} /></button>
+                            <button onClick={() => downloadReceipt(r.id)} className="km-icon-btn-tiny"><Download size={13} /></button>
+                            <button onClick={() => deleteReceipt(r.id)} className="km-icon-btn-tiny"><Trash2 size={13} /></button>
+                          </div>
+                        </div>
+                        <div className="km-receipt-body">
+                          <div className="km-receipt-row"><span className="km-mono km-mono-tiny km-muted">CONCESSÃO</span> <span>{r.concessionaria || '—'}</span></div>
+                          <div className="km-receipt-row"><span className="km-mono km-mono-tiny km-muted">PRAÇA</span> <span>{r.praca || '—'}</span></div>
+                          {r.placa && <div className="km-receipt-row"><span className="km-mono km-mono-tiny km-muted">PLACA</span> <span>{r.placa}</span></div>}
+                          {r.via && <div className="km-receipt-row"><span className="km-mono km-mono-tiny km-muted">VIA</span> <span>{r.via}</span></div>}
+                          {r.recibo && <div className="km-receipt-row"><span className="km-mono km-mono-tiny km-muted">RECIBO</span> <span className="km-mono km-mono-tiny">{r.recibo}</span></div>}
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </section>
+            </div>
           ) : (
             <section className="km-card km-fade-up">
               <header className="km-card-head km-card-head--bordered">
@@ -1042,6 +1389,119 @@ export default function KmTracker() {
           </p>
         </footer>
       </main>
+
+      {/* ═══ MODALS ═══ */}
+
+      {/* PENDING RECEIPT CONFIRMATION */}
+      {pendingReceipt && (
+        <div className="km-modal-overlay km-fade-in" onClick={cancelReceipt}>
+          <div className="km-modal" onClick={e => e.stopPropagation()}>
+            <header className="km-card-head km-card-head--bordered">
+              <div className="km-row-tight">
+                <span className="km-redbar" />
+                <h2 className="km-h2">Confirmar Dados</h2>
+              </div>
+              <button onClick={cancelReceipt} className="km-icon-btn-tiny"><X size={16} /></button>
+            </header>
+            <div className="km-modal-body">
+              {pendingReceipt.imageUrl && (
+                <div className="km-receipt-preview">
+                  <img src={pendingReceipt.imageUrl} alt="Comprovante" />
+                </div>
+              )}
+              <div className="km-receipt-data-grid">
+                <div className="km-receipt-data-item">
+                  <span className="km-mono km-mono-tiny km-muted">TIPO</span>
+                  <span className="km-mono">{pendingReceipt.data.tipo === 'pedagio' ? '🛣️ PEDÁGIO' : '🅿️ ESTACIONAMENTO'}</span>
+                </div>
+                <div className="km-receipt-data-item">
+                  <span className="km-mono km-mono-tiny km-muted">VALOR</span>
+                  <span className="km-mono" style={{ color: 'var(--coca-red)', fontWeight: 700 }}>{brlFmt.format(pendingReceipt.data.valor || 0)}</span>
+                </div>
+                <div className="km-receipt-data-item">
+                  <span className="km-mono km-mono-tiny km-muted">CONCESSIONÁRIA</span>
+                  <span>{pendingReceipt.data.concessionaria || '—'}</span>
+                </div>
+                <div className="km-receipt-data-item">
+                  <span className="km-mono km-mono-tiny km-muted">DATA/HORA</span>
+                  <span className="km-mono">{pendingReceipt.data.dataHora || '—'}</span>
+                </div>
+                <div className="km-receipt-data-item">
+                  <span className="km-mono km-mono-tiny km-muted">PRAÇA / LOCAL</span>
+                  <span>{pendingReceipt.data.praca || '—'}</span>
+                </div>
+                {pendingReceipt.data.placa && (
+                  <div className="km-receipt-data-item">
+                    <span className="km-mono km-mono-tiny km-muted">PLACA</span>
+                    <span className="km-mono">{pendingReceipt.data.placa}</span>
+                  </div>
+                )}
+                {pendingReceipt.data.recibo && (
+                  <div className="km-receipt-data-item">
+                    <span className="km-mono km-mono-tiny km-muted">RECIBO</span>
+                    <span className="km-mono km-mono-tiny">{pendingReceipt.data.recibo}</span>
+                  </div>
+                )}
+              </div>
+              <div style={{ display: 'flex', gap: '8px', marginTop: '16px' }}>
+                <button onClick={confirmReceipt} className="km-btn km-btn--save km-btn--block km-press">
+                  <Check size={16} strokeWidth={2.4} /> CONFIRMAR E SALVAR
+                </button>
+                <button onClick={cancelReceipt} className="km-btn km-btn--ink km-press" style={{ flex: '0 0 auto', padding: '11px 16px' }}>
+                  <X size={16} />
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* API KEY MODAL */}
+      {showApiKeyModal && (
+        <div className="km-modal-overlay km-fade-in" onClick={() => setShowApiKeyModal(false)}>
+          <div className="km-modal" onClick={e => e.stopPropagation()}>
+            <header className="km-card-head km-card-head--bordered">
+              <div className="km-row-tight">
+                <Settings size={14} strokeWidth={2.4} />
+                <h2 className="km-h2">API Key do Gemini</h2>
+              </div>
+              <button onClick={() => setShowApiKeyModal(false)} className="km-icon-btn-tiny"><X size={16} /></button>
+            </header>
+            <div className="km-modal-body">
+              <p className="km-mono km-mono-tiny km-muted" style={{ marginBottom: '12px', lineHeight: '1.6' }}>
+                Acesse <strong style={{ color: 'var(--text-primary)' }}>aistudio.google.com/apikey</strong> para gerar sua chave gratuita.
+                A chave fica salva somente no seu navegador.
+              </p>
+              <input
+                type="text"
+                value={apiKeyInput}
+                onChange={e => setApiKeyInput(e.target.value)}
+                placeholder="Cole sua API Key aqui (AIza...)"
+                className="km-textarea"
+                style={{ fontFamily: 'var(--font-mono)', fontSize: '12px' }}
+              />
+              <button onClick={handleSaveApiKey} disabled={!apiKeyInput.trim()} className="km-btn km-btn--save km-btn--block km-press" style={{ marginTop: '12px' }}>
+                <Save size={16} strokeWidth={2.4} /> SALVAR API KEY
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* IMAGE PREVIEW MODAL */}
+      {receiptPreviewUrl && (
+        <div className="km-modal-overlay km-fade-in" onClick={closeReceiptPreview}>
+          <div className="km-modal km-modal--preview" onClick={e => e.stopPropagation()}>
+            <header className="km-card-head">
+              <span className="km-mono km-mono-label">◊ COMPROVANTE</span>
+              <button onClick={closeReceiptPreview} className="km-icon-btn-tiny"><X size={16} /></button>
+            </header>
+            <div className="km-receipt-preview-full">
+              <img src={receiptPreviewUrl} alt="Comprovante" />
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -1991,5 +2451,142 @@ body {
 ::view-transition-new(root) {
   animation-duration: 0.4s;
   animation-timing-function: cubic-bezier(0.32, 0.72, 0, 1);
+}
+
+/* ─── EXPENSE SUB-TABS ─────────────────────────────── */
+.km-expense-subtabs {
+  display: flex;
+  gap: 0;
+  margin-bottom: 14px;
+  border: 1.5px solid var(--border-strong);
+  box-shadow: 3px 3px 0 0 var(--border-strong);
+}
+.km-expense-subtab {
+  flex: 1;
+  padding: 9px 10px;
+  background: transparent;
+  border: none;
+  border-right: 1.5px solid var(--border-strong);
+  cursor: pointer;
+  font-family: var(--font-mono);
+  font-weight: 700;
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+  display: flex; align-items: center; justify-content: center; gap: 5px;
+  transition: all 200ms var(--ease-ios);
+  text-transform: uppercase;
+}
+.km-expense-subtab:last-child { border-right: none; }
+.km-expense-subtab--active {
+  background: var(--coca-red);
+  color: #FFF;
+}
+.km-expense-badge {
+  background: var(--text-primary);
+  color: var(--bg-base);
+  font-size: 9px;
+  padding: 1px 6px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+.km-expense-subtab--active .km-expense-badge {
+  background: rgba(255,255,255,0.9);
+  color: var(--coca-red);
+}
+
+/* ─── RECEIPT CARD BODY ────────────────────────────── */
+.km-receipt-body {
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.km-receipt-row {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+.km-receipt-row > span:first-child {
+  min-width: 80px;
+  flex-shrink: 0;
+}
+
+/* ─── MODAL ────────────────────────────────────────── */
+.km-modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 9000;
+  background: rgba(0, 0, 0, 0.65);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  backdrop-filter: blur(4px);
+}
+.km-modal {
+  background: var(--bg-surface);
+  border: 2px solid var(--border-strong);
+  box-shadow: 6px 6px 0 0 var(--border-strong);
+  max-width: 420px;
+  width: 100%;
+  max-height: 90vh;
+  overflow-y: auto;
+  animation: fadeUp 0.3s var(--ease-ios) both;
+}
+.km-modal--preview {
+  max-width: 90vw;
+}
+.km-modal-body {
+  padding: 16px;
+}
+
+/* ─── RECEIPT PREVIEW (in modal) ───────────────────── */
+.km-receipt-preview {
+  border: 1.5px solid var(--border-default);
+  margin-bottom: 14px;
+  overflow: hidden;
+  background: var(--bg-elevated);
+}
+.km-receipt-preview img {
+  width: 100%;
+  height: auto;
+  display: block;
+  max-height: 250px;
+  object-fit: contain;
+}
+.km-receipt-preview-full {
+  padding: 8px;
+}
+.km-receipt-preview-full img {
+  width: 100%;
+  height: auto;
+  display: block;
+  max-height: 80vh;
+  object-fit: contain;
+}
+
+/* ─── RECEIPT DATA GRID (confirmation) ─────────────── */
+.km-receipt-data-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.km-receipt-data-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.km-receipt-data-item > span:first-child {
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+.km-receipt-data-item > span:last-child {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-primary);
 }
 `;
