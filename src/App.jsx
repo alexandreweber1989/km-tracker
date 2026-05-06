@@ -575,12 +575,13 @@ function BigCurrency({ value, size = 'xl' }) {
 // ═══════════════════════════════════════════════════════════════════════════
 // AUTOCOMPLETE LIST
 // ═══════════════════════════════════════════════════════════════════════════
-function SuggestionsList({ suggestions, onSelect, loading }) {
+function SuggestionsList({ suggestions, onSelect, loading, hasKey }) {
+  if (!hasKey) return null; // Não mostra nada se não tiver chave, para não poluir
   if (!loading && suggestions.length === 0) return null;
 
   return (
     <div className="km-suggestions">
-      {loading && suggestions.length === 0 && (
+      {loading && (
         <div className="km-suggestion-item" style={{ opacity: 0.6 }}>
           <Loader2 size={14} className="km-spin" />
           <div className="km-suggestion-content">
@@ -1730,7 +1731,12 @@ export default function KmTracker() {
             </div>
             <div style={{ position: 'relative' }}>
               <textarea value={origin.address} onChange={e => setOrigin({ address: e.target.value, lat: null, lng: null })} placeholder="Endereço de partida" rows={2} className="km-textarea" />
-              <SuggestionsList suggestions={originSuggestions} onSelect={(s) => selectSuggestion('origin', s)} loading={loading.origin} />
+              <SuggestionsList 
+                suggestions={originSuggestions} 
+                onSelect={(s) => selectSuggestion('origin', s)} 
+                loading={loading.origin} 
+                hasKey={!!localStorage.getItem(GEMINI_KEY)}
+              />
             </div>
             <button onClick={() => capture('origin')} disabled={loading.origin} className="km-btn km-btn--red km-btn--block km-press">
               {loading.origin ? <><Loader2 size={15} className="km-spin" /> BUSCANDO…</> : <><MapPin size={15} strokeWidth={2.4} /> CAPTURAR LOCALIZAÇÃO</>}
@@ -1757,7 +1763,12 @@ export default function KmTracker() {
             </div>
             <div style={{ position: 'relative' }}>
               <textarea value={destination.address} onChange={e => setDestination({ address: e.target.value, lat: null, lng: null })} placeholder="Endereço de chegada" rows={2} className="km-textarea" />
-              <SuggestionsList suggestions={destinationSuggestions} onSelect={(s) => selectSuggestion('destination', s)} loading={loading.destination} />
+              <SuggestionsList 
+                suggestions={destinationSuggestions} 
+                onSelect={(s) => selectSuggestion('destination', s)} 
+                loading={loading.destination} 
+                hasKey={!!localStorage.getItem(GEMINI_KEY)}
+              />
             </div>
             <button onClick={() => capture('destination')} disabled={loading.destination} className="km-btn km-btn--ink km-btn--block km-press">
               {loading.destination ? <><Loader2 size={15} className="km-spin" /> BUSCANDO…</> : <><Flag size={15} strokeWidth={2.4} /> CAPTURAR LOCALIZAÇÃO</>}
