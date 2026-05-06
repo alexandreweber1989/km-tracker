@@ -266,21 +266,22 @@ Retorne SOMENTE o JSON puro, sem explicações, sem formatação markdown.`;
 
 /**
  * Inteligência 2.0: Resolve nomes de empresas + cidades/bairros
+ * Agora retorna uma LISTA de sugestões para o dropdown.
  */
 async function resolvePlaceWithGemini(query, apiKey) {
-  if (!query || query.length < 3) return null;
+  if (!query || query.length < 3) return [];
   const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
   const prompt = `Você é um resolvedor de endereços geográficos especializado no Brasil.
-Seu objetivo é transformar buscas por "Nome de Empresa + Localidade" ou endereços incompletos em um endereço formatado, latitude e longitude.
+Seu objetivo é fornecer uma lista de sugestões de endereços reais baseados em buscas por "Nome de Empresa + Localidade" ou endereços incompletos.
 
 ENTRADA: "${query}"
 
 REGRAS:
-1. Priorize o contexto da localidade (Cidade, Bairro) junto ao nome da empresa se fornecido.
-2. Se o usuário digitar algo como "FEMSA Ponta Grossa", busque a unidade da FEMSA especificamente nessa cidade.
-3. Se não encontrar o local exato, tente o ponto central da rua ou bairro mencionado.
-4. Responda APENAS um JSON no formato: {"address": "Rua..., Num - Bairro, Cidade - UF, CEP", "lat": -23.123, "lng": -46.123, "isApprox": true/false}
-5. Não use markdown, responda apenas o objeto JSON.`;
+1. Retorne até 5 sugestões que façam sentido no contexto geográfico (Cidade, Bairro) mencionado.
+2. Cada sugestão deve incluir o endereço formatado (com número se possível), latitude e longitude.
+3. Se o usuário digitar "FEMSA Ponta Grossa", a lista deve conter as unidades da FEMSA nessa cidade.
+4. Responda APENAS um JSON no formato: [{"address": "Rua..., Num - Bairro, Cidade - UF, CEP", "lat": -23.123, "lng": -46.123}, ...]
+5. Não use markdown, responda apenas o array JSON.`;
 
   const body = { contents: [{ parts: [{ text: prompt }] }] };
   try {
@@ -289,13 +290,14 @@ REGRAS:
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body)
     });
-    if (!response.ok) return null;
+    if (!response.ok) return [];
     const data = await response.json();
     const text = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
     const cleaned = text.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
-    return JSON.parse(cleaned);
+    const parsed = JSON.parse(cleaned);
+    return Array.isArray(parsed) ? parsed : [parsed];
   } catch {
-    return null;
+    return [];
   }
 }
 
@@ -567,6 +569,30 @@ function BigCurrency({ value, size = 'xl' }) {
       <span className="km-big-currency-int">{integer}</span>
       <span className="km-big-currency-dec">{decimal}</span>
     </span>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// AUTOCOMPLETE LIST
+// ═══════════════════════════════════════════════════════════════════════════
+function SuggestionsList({ suggestions, onSelect, loading }) {
+  if (loading && suggestions.length === 0) return null;
+  if (!loading && suggestions.length === 0) return null;
+
+  return (
+    <div className="km-suggestions">
+      {suggestions.map((s, i) => (
+        <div key={i} className="km-suggestion-item km-press" onClick={() => onSelect(s)}>
+          <div className="km-suggestion-icon">
+            <MapPin size={14} />
+          </div>
+          <div className="km-suggestion-content">
+            <div className="km-suggestion-addr">{s.address}</div>
+            <div className="km-suggestion-meta">SUGESTÃO · GPS OK</div>
+          </div>
+        </div>
+      ))}
+    </div>
   );
 }
 
@@ -867,6 +893,10 @@ export default function KmTracker() {
   const [editDestination, setEditDestination] = useState('');
   const [editLoading, setEditLoading] = useState(false);
 
+  // ─── AUTOCOMPLETE SUGGESTIONS ───────────────────────────────────────────
+  const [originSuggestions, setOriginSuggestions] = useState([]);
+  const [destinationSuggestions, setDestinationSuggestions] = useState([]);
+
   // ─── INIT: theme, sound prefs, splash ──────────────────────────────────
   useEffect(() => {
     setThemeState(getInitialTheme());
@@ -954,40 +984,40 @@ export default function KmTracker() {
 
   // ─── AUTOCOMPLETE (INTELIGÊNCIA 2.0) ────────────────────────────────────
   useEffect(() => {
-    if (!origin.address || origin.lat != null || origin.address.length < 5) return;
+    // Se já tem lat/lng, não precisa de sugestões
+    if (!origin.address || origin.lat != null || origin.address.length < 5) {
+      setOriginSuggestions([]); return;
+    }
     const apiKey = localStorage.getItem(GEMINI_KEY);
     if (!apiKey) return;
 
     const timer = setTimeout(async () => {
       setLoading(prev => ({ ...prev, origin: true }));
-      const res = await resolvePlaceWithGemini(origin.address, apiKey);
-      if (res && res.lat) {
-        setOrigin(prev => ({ ...prev, address: res.address, lat: res.lat, lng: res.lng }));
-        feedback('success');
-      }
+      const list = await resolvePlaceWithGemini(origin.address, apiKey);
+      setOriginSuggestions(list || []);
       setLoading(prev => ({ ...prev, origin: false }));
-    }, 2000);
+    }, 1000);
 
     return () => clearTimeout(timer);
-  }, [origin.address]);
+  }, [origin.address, origin.lat]);
 
   useEffect(() => {
-    if (!destination.address || destination.lat != null || destination.address.length < 5) return;
+    // Se já tem lat/lng, não precisa de sugestões
+    if (!destination.address || destination.lat != null || destination.address.length < 5) {
+      setDestinationSuggestions([]); return;
+    }
     const apiKey = localStorage.getItem(GEMINI_KEY);
     if (!apiKey) return;
 
     const timer = setTimeout(async () => {
       setLoading(prev => ({ ...prev, destination: true }));
-      const res = await resolvePlaceWithGemini(destination.address, apiKey);
-      if (res && res.lat) {
-        setDestination(prev => ({ ...prev, address: res.address, lat: res.lat, lng: res.lng }));
-        feedback('success');
-      }
+      const list = await resolvePlaceWithGemini(destination.address, apiKey);
+      setDestinationSuggestions(list || []);
       setLoading(prev => ({ ...prev, destination: false }));
-    }, 2000);
+    }, 1000);
 
     return () => clearTimeout(timer);
-  }, [destination.address]);
+  }, [destination.address, destination.lat]);
 
   // ─── HANDLERS ───────────────────────────────────────────────────────────
   async function capture(which) {
@@ -1027,6 +1057,17 @@ export default function KmTracker() {
   function clearLocation(which) {
     feedback('tap');
     (which === 'origin' ? setOrigin : setDestination)({ address: '', lat: null, lng: null });
+  }
+
+  function selectSuggestion(which, s) {
+    if (which === 'origin') {
+      setOrigin({ address: s.address, lat: s.lat, lng: s.lng });
+      setOriginSuggestions([]);
+    } else {
+      setDestination({ address: s.address, lat: s.lat, lng: s.lng });
+      setDestinationSuggestions([]);
+    }
+    feedback('success');
   }
 
   function handleSave() {
@@ -1680,7 +1721,10 @@ export default function KmTracker() {
                 <button onClick={() => clearLocation('origin')} className="km-textbtn">CLEAR</button>
               )}
             </div>
-            <textarea value={origin.address} onChange={e => setOrigin({...origin, address:e.target.value})} placeholder="Endereço de partida" rows={2} className="km-textarea" />
+            <div style={{ position: 'relative' }}>
+              <textarea value={origin.address} onChange={e => setOrigin({ address: e.target.value, lat: null, lng: null })} placeholder="Endereço de partida" rows={2} className="km-textarea" />
+              <SuggestionsList suggestions={originSuggestions} onSelect={(s) => selectSuggestion('origin', s)} loading={loading.origin} />
+            </div>
             <button onClick={() => capture('origin')} disabled={loading.origin} className="km-btn km-btn--red km-btn--block km-press">
               {loading.origin ? <><Loader2 size={15} className="km-spin" /> BUSCANDO…</> : <><MapPin size={15} strokeWidth={2.4} /> CAPTURAR LOCALIZAÇÃO</>}
             </button>
@@ -1704,7 +1748,10 @@ export default function KmTracker() {
                 <button onClick={() => clearLocation('destination')} className="km-textbtn">CLEAR</button>
               )}
             </div>
-            <textarea value={destination.address} onChange={e => setDestination({...destination, address:e.target.value})} placeholder="Endereço de chegada" rows={2} className="km-textarea" />
+            <div style={{ position: 'relative' }}>
+              <textarea value={destination.address} onChange={e => setDestination({ address: e.target.value, lat: null, lng: null })} placeholder="Endereço de chegada" rows={2} className="km-textarea" />
+              <SuggestionsList suggestions={destinationSuggestions} onSelect={(s) => selectSuggestion('destination', s)} loading={loading.destination} />
+            </div>
             <button onClick={() => capture('destination')} disabled={loading.destination} className="km-btn km-btn--ink km-btn--block km-press">
               {loading.destination ? <><Loader2 size={15} className="km-spin" /> BUSCANDO…</> : <><Flag size={15} strokeWidth={2.4} /> CAPTURAR LOCALIZAÇÃO</>}
             </button>
@@ -3293,5 +3340,60 @@ body {
 }
 .km-trip-edit-body .km-textarea {
   font-size: 12px;
+}
+
+/* ─── SUGGESTIONS DROPDOWN ─────────────────────────── */
+.km-suggestions {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  z-index: 1000;
+  background: var(--bg-elevated);
+  border: 1.5px solid var(--border-subtle);
+  border-top: none;
+  box-shadow: 0 10px 30px rgba(0,0,0,0.15);
+  max-height: 240px;
+  overflow-y: auto;
+  border-radius: 0 0 12px 12px;
+  animation: fadeUp 0.2s var(--ease-ios) both;
+}
+.km-suggestion-item {
+  padding: 12px 16px;
+  cursor: pointer;
+  border-bottom: 1px solid var(--border-subtle);
+  transition: all 0.2s ease;
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+.km-suggestion-item:last-child {
+  border-bottom: none;
+}
+.km-suggestion-item:hover {
+  background: var(--bg-base);
+  padding-left: 20px;
+}
+.km-suggestion-icon {
+  margin-top: 2px;
+  color: var(--coca-red);
+  opacity: 0.7;
+}
+.km-suggestion-content {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.km-suggestion-addr {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-primary);
+  line-height: 1.3;
+}
+.km-suggestion-meta {
+  font-size: 10px;
+  color: var(--text-muted);
+  font-family: 'Geist Mono', monospace;
+  letter-spacing: -0.02em;
 }
 `;
