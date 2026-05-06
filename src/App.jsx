@@ -258,15 +258,15 @@ export default function KmTracker(){
     const typedNum=query.match(/[\s,]+(\d{1,5})(?:\s*[-,]|\s*$)/);
     const num=typedNum?typedNum[1]:null;
     try{
-      // Melhoramos a busca para incluir nomes de negócios e POIs
-      const url=`https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(query)}&format=json&addressdetails=1&accept-language=pt-BR&countrycodes=br&limit=8&viewbox=-49.4,-25.6,-49.1,-25.3&bounded=0`;
+      // Tornamos a busca muito mais abrangente e flexível em todo o território nacional
+      const url=`https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(query)}&format=json&addressdetails=1&accept-language=pt-BR&countrycodes=br&limit=10&dedupe=1`;
       const r=await fetch(url);
       if(!r.ok)return;
       const list=await r.json();
       const results=list.map(item=>{
         const a=item.address||{};
-        // Se for um negócio (POI), o Nominatim retorna o nome no campo 'name' ou 'display_name'
-        const name=item.name || (item.type !== 'house' && item.type !== 'street' ? item.display_name.split(',')[0] : '');
+        // Lógica aprimorada para extrair o nome do estabelecimento
+        const name = item.name || (item.class === 'amenity' || item.class === 'shop' || item.class === 'office' || item.class === 'industrial' ? item.display_name.split(',')[0] : '');
         const street=a.road||a.pedestrian||a.path||'';
         const houseNum=a.house_number||num||'';
         const neighborhood=a.suburb||a.neighbourhood||a.quarter||a.city_district||'';
@@ -274,15 +274,17 @@ export default function KmTracker(){
         const stateAbbr=STATE_MAP[a.state||'']||a.state||'';
         
         let label = '';
-        if (name && name !== street) label = `${name.toUpperCase()} · `;
+        if (name && name.toLowerCase() !== street.toLowerCase()) {
+          label = `${name.toUpperCase()} · `;
+        }
         
-        let addrPart = street;
-        if(houseNum) addrPart += `, ${houseNum}`;
-        if(neighborhood) addrPart += ` - ${neighborhood}`;
-        if(city) addrPart += `, ${city}`;
-        if(stateAbbr) addrPart += ` - ${stateAbbr}`;
+        let addrParts = [];
+        if(street) addrParts.push(houseNum ? `${street}, ${houseNum}` : street);
+        if(neighborhood) addrParts.push(neighborhood);
+        if(city) addrParts.push(stateAbbr ? `${city} - ${stateAbbr}` : city);
         
-        label += addrPart || item.display_name;
+        const addrStr = addrParts.join(', ');
+        label += addrStr || item.display_name;
         
         return{label,lat:parseFloat(item.lat),lng:parseFloat(item.lon)};
       });
