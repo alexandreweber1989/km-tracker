@@ -271,7 +271,7 @@ Retorne SOMENTE o JSON puro, sem explicações, sem formatação markdown.`;
 async function resolvePlaceWithGemini(query, apiKey) {
   if (!query || query.length < 3) return [];
   console.log('Resolving place with Gemini:', query);
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key=${apiKey}`;
   const prompt = `Você é um resolvedor de endereços geográficos especializado no Brasil.
 Seu objetivo é fornecer uma lista de sugestões de endereços reais baseados em buscas por "Nome de Empresa + Localidade" ou endereços incompletos.
 
@@ -1681,6 +1681,9 @@ export default function KmTracker() {
             </button>
             <button onClick={handleToggleHaptic} className="km-icon-btn" aria-label="Vibração">
               <Vibrate size={16} strokeWidth={2.4} style={{ opacity: hapticOn ? 1 : 0.35 }} />
+            </button>
+            <button onClick={() => setShowApiKeyModal(true)} className="km-icon-btn" aria-label="API Key">
+              <Settings size={16} strokeWidth={2.4} />
             </button>
           </div>
         </div>
