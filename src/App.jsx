@@ -8,7 +8,7 @@ import * as XLSX from 'xlsx';
 // CONFIG
 // ═══════════════════════════════════════════════════════════════════════════
 const RATE = 1.14; // R$ / km
-const APP_VERSION = 'v3·0';
+const APP_VERSION = 'v3·1';
 
 const SEED_TRIPS = [
   { id: 's1', date: '20/04/2026', origin: 'Rua Attilio Ceccarelli, 90 - Jardim Rio Pequeno, São Paulo - SP, 05388-040', destination: 'Rua dos Marianos, 349 - Centro, Osasco - SP, 06016-050', km: null, geometry: null },
@@ -261,6 +261,41 @@ Retorne SOMENTE o JSON puro, sem explicações, sem formatação markdown.`;
     return JSON.parse(cleaned);
   } catch {
     throw new Error('A IA não conseguiu extrair os dados. Tente tirar outra foto com melhor iluminação.');
+  }
+}
+
+/**
+ * Inteligência 2.0: Resolve nomes de empresas + cidades/bairros
+ */
+async function resolvePlaceWithGemini(query, apiKey) {
+  if (!query || query.length < 3) return null;
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
+  const prompt = `Você é um resolvedor de endereços geográficos especializado no Brasil.
+Seu objetivo é transformar buscas por "Nome de Empresa + Localidade" ou endereços incompletos em um endereço formatado, latitude e longitude.
+
+ENTRADA: "${query}"
+
+REGRAS:
+1. Priorize o contexto da localidade (Cidade, Bairro) junto ao nome da empresa se fornecido.
+2. Se o usuário digitar algo como "FEMSA Ponta Grossa", busque a unidade da FEMSA especificamente nessa cidade.
+3. Se não encontrar o local exato, tente o ponto central da rua ou bairro mencionado.
+4. Responda APENAS um JSON no formato: {"address": "Rua..., Num - Bairro, Cidade - UF, CEP", "lat": -23.123, "lng": -46.123, "isApprox": true/false}
+5. Não use markdown, responda apenas o objeto JSON.`;
+
+  const body = { contents: [{ parts: [{ text: prompt }] }] };
+  try {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+    if (!response.ok) return null;
+    const data = await response.json();
+    const text = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+    const cleaned = text.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+    return JSON.parse(cleaned);
+  } catch {
+    return null;
   }
 }
 
@@ -538,17 +573,31 @@ function BigCurrency({ value, size = 'xl' }) {
 // ═══════════════════════════════════════════════════════════════════════════
 // DASHBOARD
 // ═══════════════════════════════════════════════════════════════════════════
-function Dashboard({ trips, totalDespesas = 0 }) {
+function Dashboard({ trips, receipts = [] }) {
   const stats = useMemo(() => {
     const totalKm = trips.reduce((s, t) => s + (t.km || 0), 0);
     const measured = trips.filter(t => t.km != null);
 
+    const pedagios = receipts.filter(r => r.tipo === 'pedagio');
+    const estacionamentos = receipts.filter(r => r.tipo === 'estacionamento');
+    const totalPedagios = pedagios.reduce((s, r) => s + (r.valor || 0), 0);
+    const totalEstacionamentos = estacionamentos.reduce((s, r) => s + (r.valor || 0), 0);
+    const totalDespesas = totalPedagios + totalEstacionamentos;
+
     const byDay = {};
     for (const t of measured) {
-      if (!byDay[t.date]) byDay[t.date] = { km: 0, count: 0 };
+      if (!byDay[t.date]) byDay[t.date] = { km: 0, count: 0, toll: 0, parking: 0 };
       byDay[t.date].km += t.km;
       byDay[t.date].count += 1;
     }
+    for (const r of receipts) {
+      const date = r.dataHora?.split(' ')[0] || '';
+      if (!date) continue;
+      if (!byDay[date]) byDay[date] = { km: 0, count: 0, toll: 0, parking: 0 };
+      if (r.tipo === 'pedagio') byDay[date].toll += (r.valor || 0);
+      else byDay[date].parking += (r.valor || 0);
+    }
+
     const days = Object.entries(byDay).map(([date, d]) => ({ date, ...d }))
       .sort((a, b) => {
         const p = s => { const [d,m,y] = s.split('/'); return new Date(y,m-1,d); };
@@ -559,11 +608,21 @@ function Dashboard({ trips, totalDespesas = 0 }) {
     for (const t of measured) {
       const [d, m, y] = t.date.split('/');
       const key = `${m}/${y}`;
-      if (!byMonth[key]) byMonth[key] = { km: 0, count: 0, days: new Set() };
+      if (!byMonth[key]) byMonth[key] = { km: 0, count: 0, days: new Set(), toll: 0, parking: 0 };
       byMonth[key].km += t.km;
       byMonth[key].count += 1;
       byMonth[key].days.add(t.date);
     }
+    for (const r of receipts) {
+      const date = r.dataHora?.split(' ')[0] || '';
+      if (!date) continue;
+      const [d, m, y] = date.split('/');
+      const key = `${m}/${y}`;
+      if (!byMonth[key]) byMonth[key] = { km: 0, count: 0, days: new Set(), toll: 0, parking: 0 };
+      if (r.tipo === 'pedagio') byMonth[key].toll += (r.valor || 0);
+      else byMonth[key].parking += (r.valor || 0);
+    }
+
     const months = Object.entries(byMonth).map(([key, d]) => ({ key, ...d, daysCount: d.days.size }))
       .sort((a, b) => {
         const [ma, ya] = a.key.split('/');
@@ -575,7 +634,6 @@ function Dashboard({ trips, totalDespesas = 0 }) {
     const avgPerDay = days.length > 0 ? totalKm / days.length : 0;
     const bestDay = days.reduce((a, b) => (a?.km || 0) > b.km ? a : b, null);
 
-    // Current month projection
     const now = new Date();
     const currentKey = `${String(now.getMonth()+1).padStart(2,'0')}/${now.getFullYear()}`;
     const currentMonth = byMonth[currentKey];
@@ -584,10 +642,9 @@ function Dashboard({ trips, totalDespesas = 0 }) {
     let projection = null;
     if (currentMonth && today > 0) {
       const projKm = (currentMonth.km / Math.min(today, daysInMonth)) * daysInMonth;
-      projection = { km: projKm, money: projKm * RATE };
+      projection = { km: projKm, money: (projKm * RATE) + currentMonth.toll + currentMonth.parking };
     }
 
-    // Last 14 days for sparkline (real or zero)
     const last14 = [];
     for (let i = 13; i >= 0; i--) {
       const d = new Date(now);
@@ -596,10 +653,10 @@ function Dashboard({ trips, totalDespesas = 0 }) {
       last14.push(byDay[key]?.km || 0);
     }
 
-    return { totalKm, measuredCount: measured.length, days, months, maxDayKm, avgPerDay, bestDay, projection, last14, currentMonth };
-  }, [trips]);
+    return { totalKm, totalPedagios, totalEstacionamentos, totalDespesas, measuredCount: measured.length, days, months, maxDayKm, avgPerDay, bestDay, projection, last14, currentMonth };
+  }, [trips, receipts]);
 
-  const totalEarning = (stats.totalKm * RATE) + totalDespesas;
+  const totalEarning = (stats.totalKm * RATE) + stats.totalDespesas;
 
   return (
     <div className="km-dash km-fade-up">
@@ -894,6 +951,43 @@ export default function KmTracker() {
     })();
     return () => { cancelled = true; };
   }, [origin.lat, origin.lng, destination.lat, destination.lng]);
+
+  // ─── AUTOCOMPLETE (INTELIGÊNCIA 2.0) ────────────────────────────────────
+  useEffect(() => {
+    if (!origin.address || origin.lat != null || origin.address.length < 5) return;
+    const apiKey = localStorage.getItem(GEMINI_KEY);
+    if (!apiKey) return;
+
+    const timer = setTimeout(async () => {
+      setLoading(prev => ({ ...prev, origin: true }));
+      const res = await resolvePlaceWithGemini(origin.address, apiKey);
+      if (res && res.lat) {
+        setOrigin(prev => ({ ...prev, address: res.address, lat: res.lat, lng: res.lng }));
+        feedback('success');
+      }
+      setLoading(prev => ({ ...prev, origin: false }));
+    }, 2000);
+
+    return () => clearTimeout(timer);
+  }, [origin.address]);
+
+  useEffect(() => {
+    if (!destination.address || destination.lat != null || destination.address.length < 5) return;
+    const apiKey = localStorage.getItem(GEMINI_KEY);
+    if (!apiKey) return;
+
+    const timer = setTimeout(async () => {
+      setLoading(prev => ({ ...prev, destination: true }));
+      const res = await resolvePlaceWithGemini(destination.address, apiKey);
+      if (res && res.lat) {
+        setDestination(prev => ({ ...prev, address: res.address, lat: res.lat, lng: res.lng }));
+        feedback('success');
+      }
+      setLoading(prev => ({ ...prev, destination: false }));
+    }, 2000);
+
+    return () => clearTimeout(timer);
+  }, [destination.address]);
 
   // ─── HANDLERS ───────────────────────────────────────────────────────────
   async function capture(which) {
@@ -1429,7 +1523,7 @@ export default function KmTracker() {
 
   // ─── COMPUTED ───────────────────────────────────────────────────────────
   const totalKm = trips.reduce((s, t) => s + (t.km || 0), 0);
-  const totalEarning = totalKm * RATE;
+  const kmEarning = totalKm * RATE;
   const tripsWithKm = trips.filter(t => t.km != null).length;
   const canSave = origin.address.trim() && destination.address.trim();
 
@@ -1438,6 +1532,44 @@ export default function KmTracker() {
   const totalPedagios = pedagios.reduce((s, r) => s + (r.valor || 0), 0);
   const totalEstacionamentos = estacionamentos.reduce((s, r) => s + (r.valor || 0), 0);
   const totalDespesas = totalPedagios + totalEstacionamentos;
+  const totalEarning = kmEarning + totalDespesas;
+
+  async function backfillMissingDfes() {
+    const apiKey = localStorage.getItem(GEMINI_KEY);
+    if (!apiKey) { setShowApiKeyModal(true); return; }
+
+    const pending = receipts.filter(r => r.tipo === 'pedagio' && !r.dfe);
+    if (pending.length === 0) {
+      setSuccess('Todos os recibos já possuem DFE');
+      setTimeout(() => setSuccess(null), 2000);
+      return;
+    }
+
+    setTopLoading(true);
+    let count = 0;
+    for (const r of pending) {
+      try {
+        const blob = await getReceiptImage(r.id);
+        if (!blob) continue;
+        const base64 = await new Promise((res) => {
+          const reader = new FileReader();
+          reader.onload = () => res(reader.result.split(',')[1]);
+          reader.readAsDataURL(blob);
+        });
+        const data = await analyzeReceiptWithGemini(base64, apiKey);
+        if (data && data.dfe) {
+          setReceipts(prev => prev.map(item => item.id === r.id ? { ...item, dfe: data.dfe } : item));
+          count++;
+        }
+      } catch (e) {
+        console.error('Erro no backfill:', e);
+      }
+    }
+    setTopLoading(false);
+    setSuccess(`${count} recibos atualizados com DFE`);
+    setTimeout(() => setSuccess(null), 3000);
+    feedback('success');
+  }
 
   const marqueeText = ' · DRIVE LOG · COCA-COLA BR · FROTA · ' + numFmt.format(totalKm) + ' KM · ' + brlFmt.format(totalEarning) + ' · ' + String(trips.length).padStart(3,'0') + ' VIAGENS' + (totalDespesas > 0 ? ' · ' + brlFmt.format(totalDespesas) + ' DESPESAS' : '');
 
@@ -1499,7 +1631,7 @@ export default function KmTracker() {
               <span className="km-mono km-mono-tiny">{numFmt.format(totalKm)} KM TOTAIS</span>
             </span>
             <span className="km-mono km-mono-tiny km-muted">
-              {String(trips.length).padStart(3,'0')} TRIPS · {String(tripsWithKm).padStart(3,'0')} MED
+              {brlFmt.format(kmEarning)} KM + {brlFmt.format(totalDespesas)} DESP
             </span>
           </div>
         </div>
@@ -1635,7 +1767,7 @@ export default function KmTracker() {
         {/* TAB CONTENT */}
         <div className="km-tabcontent" key={activeTab}>
           {activeTab === 'dashboard' ? (
-            <Dashboard trips={trips} totalDespesas={totalDespesas} />
+            <Dashboard trips={trips} receipts={receipts} />
           ) : activeTab === 'expenses' ? (
             <div className="km-fade-up">
               {/* EXPENSE SUB-TABS */}
@@ -1656,9 +1788,14 @@ export default function KmTracker() {
               </button>
 
               {/* API KEY CONFIG */}
-              <button onClick={() => { setApiKeyInput(localStorage.getItem(GEMINI_KEY) || ''); setShowApiKeyModal(true); }} className="km-textbtn" style={{ fontSize: '10px', marginBottom: '14px', display: 'flex', alignItems: 'center', gap: '4px' }}>
-                <Settings size={11} /> CONFIGURAR API KEY
-              </button>
+              <div style={{ display: 'flex', gap: '8px', marginBottom: '14px' }}>
+                <button onClick={() => { setApiKeyInput(localStorage.getItem(GEMINI_KEY) || ''); setShowApiKeyModal(true); }} className="km-textbtn" style={{ fontSize: '10px', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                  <Settings size={11} /> CONFIGURAR API KEY
+                </button>
+                <button onClick={backfillMissingDfes} className="km-textbtn" style={{ fontSize: '10px', display: 'flex', alignItems: 'center', gap: '4px', color: 'var(--coca-red)' }}>
+                  <Check size={11} /> ATUALIZAR DFES ANTIGOS
+                </button>
+              </div>
 
               {/* TOTAL CARD */}
               <section className="km-card" style={{ marginBottom: '14px' }}>
