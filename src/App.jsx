@@ -227,7 +227,8 @@ Extraia os seguintes dados em formato JSON puro (sem markdown, sem \`\`\`json):
   "placa": "placa do veículo se visível ou null",
   "classe": "classe do veículo se visível ou null",
   "valor": 0.00,
-  "recibo": "número do recibo/DFE se visível ou null"
+  "recibo": "número do recibo se visível ou null",
+  "dfe": "número do DFE (Documento Fiscal Equivalente) exatamente como impresso, mantendo todos os zeros à esquerda, ou null"
 }
 Se algum campo não estiver visível no documento, retorne null para esse campo.
 Retorne SOMENTE o JSON puro, sem explicações, sem formatação markdown.`;
@@ -537,7 +538,7 @@ function BigCurrency({ value, size = 'xl' }) {
 // ═══════════════════════════════════════════════════════════════════════════
 // DASHBOARD
 // ═══════════════════════════════════════════════════════════════════════════
-function Dashboard({ trips }) {
+function Dashboard({ trips, totalDespesas = 0 }) {
   const stats = useMemo(() => {
     const totalKm = trips.reduce((s, t) => s + (t.km || 0), 0);
     const measured = trips.filter(t => t.km != null);
@@ -598,7 +599,7 @@ function Dashboard({ trips }) {
     return { totalKm, measuredCount: measured.length, days, months, maxDayKm, avgPerDay, bestDay, projection, last14, currentMonth };
   }, [trips]);
 
-  const totalEarning = stats.totalKm * RATE;
+  const totalEarning = (stats.totalKm * RATE) + totalDespesas;
 
   return (
     <div className="km-dash km-fade-up">
@@ -606,16 +607,20 @@ function Dashboard({ trips }) {
       <section className="km-card km-card--hero">
         <div className="km-aurora" />
         <header className="km-card-head">
-          <span className="km-mono km-mono-label">[ TOTAL · ALL-TIME ]</span>
+          <span className="km-mono km-mono-label">[ TOTAL GERAL A RECEBER ]</span>
           <span className="km-mono km-mono-label">{String(trips.length).padStart(3,'0')}/REC</span>
         </header>
         <div className="km-hero-amount">
           <BigCurrency value={totalEarning} size="xl" />
         </div>
         <div className="km-hero-meta">
-          <span className="km-mono">{numFmt.format(stats.totalKm)} KM</span>
-          <span className="km-divider-vert" />
-          <span className="km-mono km-muted">× R$ 1,14/KM</span>
+          <span className="km-mono">{numFmt.format(stats.totalKm)} KM (R$ {brlFmt.format(stats.totalKm * RATE)})</span>
+          {totalDespesas > 0 && (
+            <>
+              <span className="km-divider-vert" />
+              <span className="km-mono" style={{ color: 'var(--coca-red)' }}>+ DESP: R$ {brlFmt.format(totalDespesas)}</span>
+            </>
+          )}
         </div>
         {stats.last14.some(v => v > 0) && (
           <div className="km-hero-spark">
@@ -1630,7 +1635,7 @@ export default function KmTracker() {
         {/* TAB CONTENT */}
         <div className="km-tabcontent" key={activeTab}>
           {activeTab === 'dashboard' ? (
-            <Dashboard trips={trips} />
+            <Dashboard trips={trips} totalDespesas={totalDespesas} />
           ) : activeTab === 'expenses' ? (
             <div className="km-fade-up">
               {/* EXPENSE SUB-TABS */}
@@ -1703,6 +1708,7 @@ export default function KmTracker() {
                           {r.placa && <div className="km-receipt-row"><span className="km-mono km-mono-tiny km-muted">PLACA</span> <span>{r.placa}</span></div>}
                           {r.via && <div className="km-receipt-row"><span className="km-mono km-mono-tiny km-muted">VIA</span> <span>{r.via}</span></div>}
                           {r.recibo && <div className="km-receipt-row"><span className="km-mono km-mono-tiny km-muted">RECIBO</span> <span className="km-mono km-mono-tiny">{r.recibo}</span></div>}
+                          {r.dfe && <div className="km-receipt-row"><span className="km-mono km-mono-tiny km-muted">DFE</span> <span className="km-mono km-mono-tiny" style={{ color: 'var(--coca-red)' }}>{r.dfe}</span></div>}
                         </div>
                       </li>
                     ))}
@@ -2532,42 +2538,59 @@ body {
 /* ─── HISTORY LIST ──────────────────────────────────── */
 .km-trip-list { list-style: none; padding: 0; margin: 0; }
 .km-trip {
-  padding: 14px 0 10px;
-  border-bottom: 1px solid var(--border-default);
+  background: var(--bg-base);
+  border: 1px solid var(--border-default);
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  position: relative;
+  border-radius: 12px;
+  box-shadow: 0 4px 14px rgba(0,0,0,0.03);
+  margin-bottom: 14px;
 }
-.km-trip:first-child { padding-top: 4px; }
-.km-trip:last-child { border-bottom: 2px solid var(--border-strong); padding-bottom: 14px; }
+.km-trip:first-child { margin-top: 4px; }
+.km-trip:last-child { margin-bottom: 14px; }
 .km-trip-head {
   display: flex; justify-content: space-between; align-items: flex-start;
-  margin-bottom: 9px;
+  padding-bottom: 12px;
+  border-bottom: 1px dashed var(--border-default);
 }
 .km-trip-head-right { display: flex; align-items: center; gap: 8px; }
 .km-trip-km {
   display: flex; flex-direction: column; align-items: flex-end;
-  gap: 3px;
+  gap: 4px;
 }
 .km-trip-km-pill {
   font-family: var(--font-mono);
-  font-size: 10.5px;
+  font-size: 11px;
   font-weight: 700;
-  background: var(--coca-red);
-  color: #FFF;
-  padding: 3px 9px;
+  background: var(--text-primary);
+  color: var(--bg-base);
+  padding: 4px 10px;
+  border-radius: 6px;
   letter-spacing: 0.04em;
-  border: 1.5px solid var(--border-strong);
-  box-shadow: 2px 2px 0 0 var(--border-strong);
 }
 .km-trip-km-money {
-  color: var(--status-green);
-  font-weight: 600;
+  color: var(--coca-red);
+  font-weight: 700;
+  font-size: 10px;
 }
 .km-icon-btn-tiny {
-  background: none; border: none; cursor: pointer;
-  color: var(--text-muted);
-  padding: 3px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-default);
+  cursor: pointer;
+  color: var(--text-secondary);
+  padding: 6px;
+  border-radius: 6px;
   display: flex;
+  transition: all 0.2s;
 }
-.km-icon-btn-tiny:hover { color: var(--coca-red); }
+.km-icon-btn-tiny:hover { 
+  color: var(--coca-red); 
+  border-color: var(--coca-red-soft);
+  background: var(--bg-base);
+}
 .km-trip-body {
   font-size: 13px;
   line-height: 1.5;
@@ -2580,11 +2603,11 @@ body {
 .km-trip-line span:first-child { margin-top: 5px; }
 .km-trip-vline {
   margin-left: 3.5px;
-  height: 11px; width: 1px;
+  height: 14px; width: 1px;
   background: var(--border-default);
-  margin-top: 1px; margin-bottom: 1px;
+  margin-top: -2px; margin-bottom: -2px;
 }
-.km-trip-flag { margin-top: 4px; flex-shrink: 0; color: var(--text-primary); }
+.km-trip-flag { margin-top: 4px; flex-shrink: 0; color: var(--coca-red); }
 
 /* ─── MINI MAP ──────────────────────────────────────── */
 .km-minimap {
