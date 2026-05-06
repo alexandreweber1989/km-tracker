@@ -266,10 +266,8 @@ Retorne SOMENTE o JSON puro, sem explicações, sem formatação markdown.`;
 
 /**
  * Photon + Nominatim — busca endereços com números em tempo real
- * Estratégia dupla:
- *   1. Photon para busca rápida geral
- *   2. Nominatim para endereços numerados específicos
- * Retorna array de: { address, lat, lng, type, number }
+ * Quando o usuário digita "Germano Justus 500", o resultado DEVE ser:
+ *   "Rua Germano Justus, 500 - Cará-Cará, Ponta Grossa - PR, 84033-001"
  */
 async function searchAddressesPhoton(query) {
   if (!query || query.length < 3) return [];
@@ -280,60 +278,73 @@ async function searchAddressesPhoton(query) {
   const numberPart = numberMatch ? numberMatch[2] : null;
   
   try {
-    // Busca paralela: Photon (rápida) + Nominatim (com números)
-    const searches = [];
+    // Busca paralela: Photon (com o nome da rua) + Nominatim
+    const photonQuery = numberPart ? streetPart : query; // Buscar só pelo nome da rua
+    const photonUrl = `https://photon.komoot.io/api/?q=${encodeURIComponent(photonQuery)}&limit=6&lang=default&lat=-23.5&lon=-49.0`;
+    const nomUrl = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(query)}&format=json&addressdetails=1&accept-language=pt-BR&limit=5&countrycodes=br`;
     
-    // 1. Photon — busca principal
-    const photonUrl = `https://photon.komoot.io/api/?q=${encodeURIComponent(query)}&limit=6&lang=default&lat=-23.5&lon=-49.0`;
-    searches.push(
-      fetch(photonUrl).then(r => r.ok ? r.json() : { features: [] }).catch(() => ({ features: [] }))
-    );
-    
-    // 2. Nominatim — busca com número (se detectado) ou busca estruturada
-    const nomQuery = encodeURIComponent(query);
-    const nomUrl = `https://nominatim.openstreetmap.org/search?q=${nomQuery}&format=json&addressdetails=1&accept-language=pt-BR&limit=5&countrycodes=br`;
-    searches.push(
+    const [photonData, nomResults] = await Promise.all([
+      fetch(photonUrl).then(r => r.ok ? r.json() : { features: [] }).catch(() => ({ features: [] })),
       fetch(nomUrl).then(r => r.ok ? r.json() : []).catch(() => [])
-    );
+    ]);
     
-    const [photonData, nomResults] = await Promise.all(searches);
-    
-    // Processar resultados do Photon
+    // ── Processar Photon ──
     const photonResults = (photonData.features || []).map(f => {
       const p = f.properties || {};
       const coords = f.geometry?.coordinates || [];
+      
+      // Identificar o nome da rua (pode vir em p.name ou p.street)
+      const streetName = p.street || p.name || '';
+      const existingNumber = p.housenumber || null;
+      const finalNumber = existingNumber || numberPart || null;
+      
+      // Montar endereço: "Rua X, NUM - Bairro, Cidade - UF, CEP"
       const parts = [];
-      if (p.name && p.name !== p.street) parts.push(p.name);
-      if (p.street) {
-        let streetStr = p.street;
-        if (p.housenumber) streetStr += `, ${p.housenumber}`;
-        else if (numberPart) streetStr += `, ${numberPart}`;
-        parts.push(streetStr);
+      
+      // Nome de lugar (se diferente da rua, ex: nome de empresa)
+      if (p.name && p.street && p.name !== p.street) {
+        parts.push(p.name);
       }
+      
+      // Rua + número
+      if (streetName) {
+        let streetWithNum = streetName;
+        if (finalNumber) streetWithNum += `, ${finalNumber}`;
+        parts.push(streetWithNum);
+      }
+      
+      // Bairro
       if (p.district || p.locality) parts.push(p.district || p.locality);
+      
+      // Cidade - Estado
       if (p.city || p.town || p.village) {
         let cityPart = p.city || p.town || p.village;
         if (p.state) cityPart += ` - ${STATE_MAP[p.state] || p.state}`;
         parts.push(cityPart);
       }
+      
+      // CEP
       if (p.postcode) parts.push(p.postcode);
+      
       return {
-        address: parts.filter(Boolean).join(', ') || p.name || query,
+        address: parts.filter(Boolean).join(', ') || query,
         lat: coords[1],
         lng: coords[0],
-        type: p.osm_value || p.type || 'place',
-        number: p.housenumber || numberPart || null
+        type: finalNumber ? 'house' : (p.osm_value || p.type || 'place'),
+        number: finalNumber
       };
     }).filter(s => s.lat && s.lng);
     
-    // Processar resultados do Nominatim (tem números melhores)
+    // ── Processar Nominatim ──
     const nomFormatted = (nomResults || []).map(item => {
       const a = item.address || {};
-      const parts = [];
       const street = a.road || a.pedestrian || a.path || '';
-      const num = a.house_number || '';
+      const existingNum = a.house_number || '';
+      const finalNum = existingNum || numberPart || null;
+      
+      const parts = [];
       if (street) {
-        parts.push(num ? `${street}, ${num}` : street);
+        parts.push(finalNum ? `${street}, ${finalNum}` : street);
       }
       if (a.suburb || a.neighbourhood) parts.push(a.suburb || a.neighbourhood);
       const city = a.city || a.town || a.village || '';
@@ -342,31 +353,30 @@ async function searchAddressesPhoton(query) {
         parts.push(st ? `${city} - ${st}` : city);
       }
       if (a.postcode) parts.push(a.postcode);
+      
       return {
         address: parts.filter(Boolean).join(', ') || item.display_name || query,
         lat: parseFloat(item.lat),
         lng: parseFloat(item.lon),
-        type: num ? 'house' : 'street',
-        number: num || null
+        type: finalNum ? 'house' : 'street',
+        number: finalNum || null
       };
     }).filter(s => s.lat && s.lng);
     
-    // Combinar resultados: priorizar os que têm número
+    // ── Combinar: priorizar resultados com número ──
     const seen = new Set();
-    const combined = [];
+    const withNumber = [];
+    const withoutNumber = [];
     
-    // Primeiro: resultados com número (do Nominatim)
-    for (const r of nomFormatted) {
+    for (const r of [...nomFormatted, ...photonResults]) {
       const key = `${r.lat.toFixed(4)},${r.lng.toFixed(4)}`;
-      if (!seen.has(key)) { seen.add(key); combined.push(r); }
-    }
-    // Depois: resultados do Photon
-    for (const r of photonResults) {
-      const key = `${r.lat.toFixed(4)},${r.lng.toFixed(4)}`;
-      if (!seen.has(key)) { seen.add(key); combined.push(r); }
+      if (seen.has(key)) continue;
+      seen.add(key);
+      if (r.number) withNumber.push(r);
+      else withoutNumber.push(r);
     }
     
-    return combined.slice(0, 6);
+    return [...withNumber, ...withoutNumber].slice(0, 6);
   } catch (err) {
     console.error('Address search error:', err);
     return [];
