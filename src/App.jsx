@@ -166,7 +166,7 @@ async function deleteReceiptImage(id) {
 // GEMINI VISION API
 // ═══════════════════════════════════════════════════════════════════════════
 async function analyzeReceiptWithGemini(imageBase64, apiKey) {
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
+  const url = `https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
   const prompt = `Analise esta foto de um comprovante de pedágio ou estacionamento brasileiro.
 Extraia os seguintes dados em formato JSON puro (sem markdown, sem \`\`\`json):
 {
