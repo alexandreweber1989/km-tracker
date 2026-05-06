@@ -265,9 +265,68 @@ Retorne SOMENTE o JSON puro, sem explicações, sem formatação markdown.`;
 }
 
 /**
- * Photon + Nominatim — busca endereços com números em tempo real
- * Quando o usuário digita "Germano Justus 500", o resultado DEVE ser:
- *   "Rua Germano Justus, 500 - Cará-Cará, Ponta Grossa - PR, 84033-001"
+ * ViaCEP — busca o CEP exato para uma rua + número no Brasil
+ * Retorna o CEP correto analisando as faixas de numeração
+ */
+async function resolveExactCEP(streetName, city, uf, houseNumber) {
+  if (!streetName || !city || !uf) return null;
+  try {
+    // Limpar o nome da rua (remover "Rua ", "Avenida ", etc.)
+    const cleanStreet = streetName
+      .replace(/^(Rua|Avenida|Av\.|Travessa|Alameda|Praça|Rodovia|Estrada)\s+/i, '')
+      .trim();
+    const url = `https://viacep.com.br/ws/${encodeURIComponent(uf)}/${encodeURIComponent(city)}/${encodeURIComponent(cleanStreet)}/json/`;
+    const response = await fetch(url);
+    if (!response.ok) return null;
+    const data = await response.json();
+    if (!Array.isArray(data) || data.length === 0) return null;
+    
+    // Se só tem 1 resultado, usar direto
+    if (data.length === 1) return data[0].cep;
+    
+    // Se tem número, tentar casar com a faixa correta via 'complemento'
+    if (houseNumber) {
+      const num = parseInt(houseNumber, 10);
+      const isOdd = num % 2 !== 0;
+      
+      for (const entry of data) {
+        const comp = (entry.complemento || '').toLowerCase();
+        if (!comp) continue;
+        
+        // Padrões: "de 601 ao fim - lado ímpar", "até 599 - lado par", "de 100 a 200"
+        const sideMatch = comp.includes('ímpar') ? 'odd' : comp.includes('par') ? 'even' : 'both';
+        if (sideMatch === 'odd' && !isOdd) continue;
+        if (sideMatch === 'even' && isOdd) continue;
+        
+        // Extrair faixas de números
+        const rangeFrom = comp.match(/de\s+(\d+)/);
+        const rangeTo = comp.match(/a\s+(\d+)/);
+        const rangeUntil = comp.match(/até\s+(\d+)/);
+        const rangeEnd = comp.includes('ao fim');
+        
+        const from = rangeFrom ? parseInt(rangeFrom[1], 10) : 0;
+        const to = rangeTo ? parseInt(rangeTo[1], 10) : (rangeEnd ? 999999 : (rangeUntil ? parseInt(rangeUntil[1], 10) : 999999));
+        
+        if (num >= from && num <= to) return entry.cep;
+      }
+      
+      // Fallback: procurar o que não tem complemento (catch-all)
+      const catchAll = data.find(e => !e.complemento || e.complemento.trim() === '');
+      if (catchAll) return catchAll.cep;
+    }
+    
+    // Último fallback: primeiro resultado
+    return data[0].cep;
+  } catch (err) {
+    console.error('ViaCEP error:', err);
+    return null;
+  }
+}
+
+/**
+ * Photon + Nominatim + ViaCEP — busca endereços com CEP EXATO
+ * Quando o usuário digita "Germano Justus 703", o resultado será:
+ *   "Rua Germano Justus, 703, Cará-Cará, Ponta Grossa - PR, 84033-106"
  */
 async function searchAddressesPhoton(query) {
   if (!query || query.length < 3) return [];
@@ -278,8 +337,8 @@ async function searchAddressesPhoton(query) {
   const numberPart = numberMatch ? numberMatch[2] : null;
   
   try {
-    // Busca paralela: Photon (com o nome da rua) + Nominatim
-    const photonQuery = numberPart ? streetPart : query; // Buscar só pelo nome da rua
+    // Busca paralela: Photon + Nominatim
+    const photonQuery = numberPart ? streetPart : query;
     const photonUrl = `https://photon.komoot.io/api/?q=${encodeURIComponent(photonQuery)}&limit=6&lang=default&lat=-23.5&lon=-49.0`;
     const nomUrl = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(query)}&format=json&addressdetails=1&accept-language=pt-BR&limit=5&countrycodes=br`;
     
@@ -292,46 +351,30 @@ async function searchAddressesPhoton(query) {
     const photonResults = (photonData.features || []).map(f => {
       const p = f.properties || {};
       const coords = f.geometry?.coordinates || [];
-      
-      // Identificar o nome da rua (pode vir em p.name ou p.street)
       const streetName = p.street || p.name || '';
       const existingNumber = p.housenumber || null;
       const finalNumber = existingNumber || numberPart || null;
       
-      // Montar endereço: "Rua X, NUM - Bairro, Cidade - UF, CEP"
       const parts = [];
-      
-      // Nome de lugar (se diferente da rua, ex: nome de empresa)
-      if (p.name && p.street && p.name !== p.street) {
-        parts.push(p.name);
-      }
-      
-      // Rua + número
+      if (p.name && p.street && p.name !== p.street) parts.push(p.name);
       if (streetName) {
-        let streetWithNum = streetName;
-        if (finalNumber) streetWithNum += `, ${finalNumber}`;
-        parts.push(streetWithNum);
+        let s = streetName;
+        if (finalNumber) s += `, ${finalNumber}`;
+        parts.push(s);
       }
-      
-      // Bairro
       if (p.district || p.locality) parts.push(p.district || p.locality);
-      
-      // Cidade - Estado
-      if (p.city || p.town || p.village) {
-        let cityPart = p.city || p.town || p.village;
-        if (p.state) cityPart += ` - ${STATE_MAP[p.state] || p.state}`;
-        parts.push(cityPart);
-      }
-      
-      // CEP
+      const city = p.city || p.town || p.village || '';
+      const state = p.state || '';
+      const uf = STATE_MAP[state] || state;
+      if (city) parts.push(uf ? `${city} - ${uf}` : city);
       if (p.postcode) parts.push(p.postcode);
       
       return {
         address: parts.filter(Boolean).join(', ') || query,
-        lat: coords[1],
-        lng: coords[0],
+        lat: coords[1], lng: coords[0],
         type: finalNumber ? 'house' : (p.osm_value || p.type || 'place'),
-        number: finalNumber
+        number: finalNumber,
+        _street: streetName, _city: city, _uf: uf, _postcode: p.postcode || null
       };
     }).filter(s => s.lat && s.lng);
     
@@ -343,31 +386,26 @@ async function searchAddressesPhoton(query) {
       const finalNum = existingNum || numberPart || null;
       
       const parts = [];
-      if (street) {
-        parts.push(finalNum ? `${street}, ${finalNum}` : street);
-      }
+      if (street) parts.push(finalNum ? `${street}, ${finalNum}` : street);
       if (a.suburb || a.neighbourhood) parts.push(a.suburb || a.neighbourhood);
       const city = a.city || a.town || a.village || '';
-      if (city) {
-        const st = STATE_MAP[a.state || ''] || a.state || '';
-        parts.push(st ? `${city} - ${st}` : city);
-      }
+      const uf = STATE_MAP[a.state || ''] || a.state || '';
+      if (city) parts.push(uf ? `${city} - ${uf}` : city);
       if (a.postcode) parts.push(a.postcode);
       
       return {
         address: parts.filter(Boolean).join(', ') || item.display_name || query,
-        lat: parseFloat(item.lat),
-        lng: parseFloat(item.lon),
+        lat: parseFloat(item.lat), lng: parseFloat(item.lon),
         type: finalNum ? 'house' : 'street',
-        number: finalNum || null
+        number: finalNum || null,
+        _street: street, _city: city, _uf: uf, _postcode: a.postcode || null
       };
     }).filter(s => s.lat && s.lng);
     
-    // ── Combinar: priorizar resultados com número ──
+    // ── Combinar: priorizar com número ──
     const seen = new Set();
     const withNumber = [];
     const withoutNumber = [];
-    
     for (const r of [...nomFormatted, ...photonResults]) {
       const key = `${r.lat.toFixed(4)},${r.lng.toFixed(4)}`;
       if (seen.has(key)) continue;
@@ -375,8 +413,32 @@ async function searchAddressesPhoton(query) {
       if (r.number) withNumber.push(r);
       else withoutNumber.push(r);
     }
+    let results = [...withNumber, ...withoutNumber].slice(0, 6);
     
-    return [...withNumber, ...withoutNumber].slice(0, 6);
+    // ── ViaCEP: corrigir CEP exato para os primeiros resultados ──
+    if (results.length > 0) {
+      const cepPromises = results.slice(0, 3).map(async (r) => {
+        if (!r._street || !r._city || !r._uf) return r;
+        const exactCEP = await resolveExactCEP(r._street, r._city, r._uf, r.number);
+        if (exactCEP) {
+          // Substituir o CEP genérico pelo exato
+          r.address = r.address.replace(/\d{5}-\d{3}$/, exactCEP);
+          if (!r.address.includes(exactCEP)) {
+            r.address = r.address + ', ' + exactCEP;
+          }
+        }
+        // Limpar campos internos
+        delete r._street; delete r._city; delete r._uf; delete r._postcode;
+        return r;
+      });
+      const rest = results.slice(3).map(r => {
+        delete r._street; delete r._city; delete r._uf; delete r._postcode;
+        return r;
+      });
+      results = [...(await Promise.all(cepPromises)), ...rest];
+    }
+    
+    return results;
   } catch (err) {
     console.error('Address search error:', err);
     return [];
