@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { jsPDF } from 'jspdf';
-import { warpPerspective } from './WarpHelper.js';
+import { autoCropDocument } from './WarpHelper.js';
 import { MapPin, Flag, Save, Download, Trash2, Loader2, AlertCircle, X, Navigation, ChevronDown, ChevronUp, ArrowDown, DollarSign, Calendar, TrendingUp, History, Sun, Moon, Volume2, VolumeX, Vibrate, Camera, Settings, Receipt, ParkingCircle, Eye, Check, Image as ImageIcon } from 'lucide-react';
 import * as XLSX from 'xlsx';
 
@@ -213,10 +213,8 @@ Extraia os seguintes dados em formato JSON puro (sem markdown, sem \`\`\`json):
   "placa": "placa do veículo se visível ou null",
   "classe": "classe do veículo se visível ou null",
   "valor": 0.00,
-  "recibo": "número do recibo/DFE se visível ou null",
-  "cantos": [{"x": 0,"y": 0}, {"x": 1000,"y": 0}, {"x": 1000,"y": 1000}, {"x": 0,"y": 1000}]
+  "recibo": "número do recibo/DFE se visível ou null"
 }
-A matriz "cantos" deve conter as 4 coordenadas exatas (Top-Left, Top-Right, Bottom-Right, Bottom-Left) dos 4 cantos físicos reais do documento/recibo na imagem, para que eu possa fazer um recorte e alinhamento (Perspective Warp). Os valores x e y devem ser uma estimativa visual da posição, convertida para a escala normalizada de 0 a 1000. Se a foto já estiver perfeitamente recortada (apenas o papel) ou se for impossível achar os cantos, retorne null.
 Se algum campo não estiver visível no documento, retorne null para esse campo.
 Retorne SOMENTE o JSON puro, sem explicações, sem formatação markdown.`;
 
@@ -927,34 +925,22 @@ export default function KmTracker() {
     setTopLoading(true);
     feedback('tap');
     try {
-      const base64 = await fileToBase64(file);
-      const data = await analyzeReceiptWithGemini(base64, apiKey);
+      // 1. Carrega imagem original na tela
+      const originalImageUrl = URL.createObjectURL(file);
+      const img = new Image();
+      img.src = originalImageUrl;
+      await new Promise(r => img.onload = r);
       
-      let finalBlob = file;
-      let finalImageUrl = URL.createObjectURL(file);
-      let finalBase64 = base64;
+      // 2. OpenCV Canny Edge Detection & Warp Perspective
+      const cropped = await autoCropDocument(img);
+      const finalBlob = cropped.blob;
+      const finalBase64 = cropped.dataUrl.split(',')[1];
+      const finalImageUrl = URL.createObjectURL(finalBlob);
+      URL.revokeObjectURL(originalImageUrl);
 
-      if (data.cantos && data.cantos.length === 4) {
-         try {
-           const img = new Image();
-           img.src = finalImageUrl;
-           await new Promise(r => img.onload = r);
-           
-           const srcCorners = data.cantos.map(c => ({
-             x: (c.x / 1000) * (img.naturalWidth || img.width),
-             y: (c.y / 1000) * (img.naturalHeight || img.height)
-           }));
-           
-           const warped = await warpPerspective(img, srcCorners);
-           finalBlob = warped.blob;
-           finalBase64 = warped.dataUrl.split(',')[1];
-           URL.revokeObjectURL(finalImageUrl);
-           finalImageUrl = URL.createObjectURL(finalBlob);
-         } catch(e) {
-           console.error("Warp falhou", e);
-         }
-      }
-
+      // 3. Envia a imagem perfeita (crop) pro Gemini extrair os dados
+      const data = await analyzeReceiptWithGemini(finalBase64, apiKey);
+      
       setPendingReceipt({ data, imageUrl: finalImageUrl, base64: finalBase64, blob: finalBlob });
       feedback('success');
     } catch (err) {
