@@ -8,7 +8,7 @@ import * as XLSX from 'xlsx';
 // CONFIG
 // ═══════════════════════════════════════════════════════════════════════════
 const RATE = 1.14; // R$ / km
-const APP_VERSION = 'v3·1';
+const APP_VERSION = 'v3.1.3';
 
 const SEED_TRIPS = [
   { id: 's1', date: '20/04/2026', origin: 'Rua Attilio Ceccarelli, 90 - Jardim Rio Pequeno, São Paulo - SP, 05388-040', destination: 'Rua dos Marianos, 349 - Centro, Osasco - SP, 06016-050', km: null, geometry: null },
@@ -291,20 +291,22 @@ REGRAS:
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body)
     });
-    if (!response.ok) return [];
+    if (!response.ok) {
+      const errData = await response.json().catch(() => ({}));
+      console.error('Gemini API Error:', response.status, errData);
+      return [{ address: `ERRO API: ${response.status}`, error: true }];
+    }
     const data = await response.json();
     const text = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
     
-    // Extração robusta de JSON (pega o que está entre colchetes)
     const jsonMatch = text.match(/\[[\s\S]*\]/);
     const cleaned = jsonMatch ? jsonMatch[0] : text.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
     
-    console.log('Gemini Autocomplete Response:', cleaned);
     const parsed = JSON.parse(cleaned);
     return Array.isArray(parsed) ? parsed : [parsed];
   } catch (err) {
-    console.error('Gemini Autocomplete Error:', err);
-    return [];
+    console.error('Gemini Autocomplete Exception:', err);
+    return [{ address: 'ERRO DE CONEXÃO', error: true }];
   }
 }
 
@@ -583,13 +585,26 @@ function BigCurrency({ value, size = 'xl' }) {
 // AUTOCOMPLETE LIST
 // ═══════════════════════════════════════════════════════════════════════════
 function SuggestionsList({ suggestions, onSelect, loading, hasKey }) {
-  if (!hasKey) return null; // Não mostra nada se não tiver chave, para não poluir
+  if (!hasKey) {
+    return (
+      <div className="km-suggestions km-suggestions--warn">
+        <div className="km-suggestion-item">
+          <Settings size={14} />
+          <div className="km-suggestion-content">
+            <div className="km-suggestion-addr">Configure a API Key para ver sugestões</div>
+            <div className="km-suggestion-meta">Clique na engrenagem no topo</div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   if (!loading && suggestions.length === 0) return null;
 
   return (
     <div className="km-suggestions">
       {loading && (
-        <div className="km-suggestion-item" style={{ opacity: 0.6 }}>
+        <div className="km-suggestion-item">
           <Loader2 size={14} className="km-spin" />
           <div className="km-suggestion-content">
             <div className="km-suggestion-addr">Buscando endereços...</div>
@@ -597,13 +612,13 @@ function SuggestionsList({ suggestions, onSelect, loading, hasKey }) {
         </div>
       )}
       {suggestions.map((s, i) => (
-        <div key={i} className="km-suggestion-item km-press" onClick={() => onSelect(s)}>
+        <div key={i} className="km-suggestion-item km-press" onClick={() => !s.error && onSelect(s)}>
           <div className="km-suggestion-icon">
-            <MapPin size={14} />
+            {s.error ? <AlertCircle size={14} color="var(--coca-red)" /> : <MapPin size={14} />}
           </div>
           <div className="km-suggestion-content">
-            <div className="km-suggestion-addr">{s.address}</div>
-            <div className="km-suggestion-meta">SUGESTÃO · GPS OK</div>
+            <div className="km-suggestion-addr" style={{ color: s.error ? 'var(--coca-red)' : 'inherit' }}>{s.address}</div>
+            <div className="km-suggestion-meta">{s.error ? 'PROBLEMA TÉCNICO' : 'SUGESTÃO · GPS OK'}</div>
           </div>
         </div>
       ))}
@@ -1734,7 +1749,7 @@ export default function KmTracker() {
                 <button onClick={() => clearLocation('origin')} className="km-textbtn">CLEAR</button>
               )}
             </div>
-            <div style={{ position: 'relative' }}>
+            <div style={{ position: 'relative', zIndex: 50 }}>
               <textarea value={origin.address} onChange={e => setOrigin({ address: e.target.value, lat: null, lng: null })} placeholder="Endereço de partida" rows={2} className="km-textarea" />
               <SuggestionsList 
                 suggestions={originSuggestions} 
@@ -1766,7 +1781,7 @@ export default function KmTracker() {
                 <button onClick={() => clearLocation('destination')} className="km-textbtn">CLEAR</button>
               )}
             </div>
-            <div style={{ position: 'relative' }}>
+            <div style={{ position: 'relative', zIndex: 40 }}>
               <textarea value={destination.address} onChange={e => setDestination({ address: e.target.value, lat: null, lng: null })} placeholder="Endereço de chegada" rows={2} className="km-textarea" />
               <SuggestionsList 
                 suggestions={destinationSuggestions} 
@@ -3429,5 +3444,23 @@ body {
   font-family: 'Geist Mono', monospace;
   letter-spacing: 0.04em;
   text-transform: uppercase;
+}
+.km-suggestions--warn {
+  border-color: var(--coca-red);
+  box-shadow: 6px 6px 0 0 var(--coca-red-glow);
+}
+.km-suggestions--warn .km-suggestion-addr {
+  color: var(--coca-red);
+}
+
+.km-badge-version {
+  background: var(--bg-dark);
+  color: #FFF;
+  font-size: 8px;
+  padding: 2px 5px;
+  font-family: var(--font-mono);
+  vertical-align: middle;
+  margin-left: 6px;
+  opacity: 0.5;
 }
 `;
