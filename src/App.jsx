@@ -258,11 +258,35 @@ export default function KmTracker(){
     const typedNum=query.match(/[\s,]+(\d{1,5})(?:\s*[-,]|\s*$)/);
     const num=typedNum?typedNum[1]:null;
     try{
-      // Tornamos a busca muito mais abrangente e flexível em todo o território nacional
-      const url=`https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(query)}&format=json&addressdetails=1&accept-language=pt-BR&countrycodes=br&limit=10&dedupe=1`;
-      const r=await fetch(url);
-      if(!r.ok)return;
-      const list=await r.json();
+      // Estratégia de busca inteligente: 
+      // 1. Tenta a busca exata
+      // 2. Se falhar, tenta substituir "FEMSA" por "Coca-Cola" (muitos locais estão cadastrados assim)
+      // 3. Se ainda falhar, tenta buscar apenas os termos geográficos
+      
+      let searchQuery = query;
+      // Normalização: FEMSA é frequentemente cadastrada como Coca-Cola no OSM
+      if (query.toUpperCase().includes('FEMSA')) {
+        searchQuery = query.toUpperCase().replace('FEMSA', 'Coca-Cola');
+      }
+
+      const fetchResults = async (q) => {
+        const url=`https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(q)}&format=json&addressdetails=1&accept-language=pt-BR&countrycodes=br&limit=10`;
+        const r=await fetch(url);
+        return r.ok ? await r.json() : [];
+      };
+
+      let list = await fetchResults(query);
+      if (list.length === 0 && searchQuery !== query) {
+        list = await fetchResults(searchQuery);
+      }
+      
+      // Se ainda não houver resultados e houver mais de uma palavra, tenta o fallback geográfico
+      if (list.length === 0 && query.split(' ').length > 1) {
+        const parts = query.split(' ');
+        const geoQuery = parts.slice(1).join(' '); // Tenta pegar a parte da cidade/bairro
+        list = await fetchResults(geoQuery);
+      }
+
       const results=list.map(item=>{
         const a=item.address||{};
         // Lógica aprimorada para extrair o nome do estabelecimento
