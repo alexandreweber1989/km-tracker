@@ -1,9 +1,9 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
-import { MapPin, Flag, Save, Download, Trash2, Loader2, AlertCircle, X, Navigation, ChevronDown, ChevronUp, ArrowDown, DollarSign, Calendar, TrendingUp, History, Sun, Moon, Volume2, VolumeX, Vibrate } from 'lucide-react';
+import { MapPin, Flag, Save, Download, Trash2, Loader2, AlertCircle, X, Navigation, ChevronDown, ChevronUp, ArrowDown, DollarSign, Calendar, TrendingUp, History, Sun, Moon, Volume2, VolumeX, Vibrate, Camera, FileText, ParkingCircle } from 'lucide-react';
 import * as XLSX from 'xlsx';
 
 const RATE = 1.14;
-const APP_VERSION = 'v3·1'; // Manus Sync Active
+const APP_VERSION = 'v3·2'; // Manus Sync Active + Expenses
 
 const SEED_TRIPS = [
   { id:'s1', date:'20/04/2026', origin:'Rua Attilio Ceccarelli, 90 - Jardim Rio Pequeno, São Paulo - SP, 05388-040', destination:'Rua dos Marianos, 349 - Centro, Osasco - SP, 06016-050', km:null, geometry:null },
@@ -32,9 +32,11 @@ async function getAddressWithNumber(lat,lng){const data=await reverseLookup(lat,
 const brlFmt=new Intl.NumberFormat('pt-BR',{style:'currency',currency:'BRL',minimumFractionDigits:2,maximumFractionDigits:2});
 const numFmt=new Intl.NumberFormat('pt-BR',{minimumFractionDigits:2,maximumFractionDigits:2});
 
-const TRIPS_KEY='km_trips_v1',THEME_KEY='coca_theme',SOUND_KEY='coca_sound',HAPTIC_KEY='coca_haptic';
+const TRIPS_KEY='km_trips_v1', EXPENSES_KEY='km_expenses_v1', THEME_KEY='coca_theme',SOUND_KEY='coca_sound',HAPTIC_KEY='coca_haptic';
 const loadTrips=()=>{try{const r=localStorage.getItem(TRIPS_KEY);return r?JSON.parse(r):null;}catch{return null;}};
 const saveTrips=(t)=>{try{localStorage.setItem(TRIPS_KEY,JSON.stringify(t));}catch{}};
+const loadExpenses=()=>{try{const r=localStorage.getItem(EXPENSES_KEY);return r?JSON.parse(r):null;}catch{return null;}};
+const saveExpenses=(e)=>{try{localStorage.setItem(EXPENSES_KEY,JSON.stringify(e));}catch{}};
 
 // ═══ FEEDBACK ═══
 let audioCtx;
@@ -98,25 +100,23 @@ function ActivityRings({kmProgress,moneyProgress,daysProgress}){
 
 // ═══ SPARKLINE ═══
 function Sparkline({values,height=36}){
-  if(!values||values.length===0)return null;
-  const W=280,H=height,max=Math.max(...values,0.01),step=W/Math.max(values.length-1,1);
-  const points=values.map((v,i)=>[i*step,H-(v/max)*(H-4)-2]);
-  const pathD=points.map(([x,y],i)=>`${i===0?'M':'L'}${x.toFixed(1)},${y.toFixed(1)}`).join(' ');
-  const areaD=pathD+` L${W},${H} L0,${H} Z`;
+  if(!values||values.length<2)return null;
+  const max=Math.max(...values,0.01);
+  const W=120,H=height;
+  const points=values.map((v,i)=>`${(i/(values.length-1))*W},${H-(v/max)*H}`).join(' ');
   return(
-    <svg viewBox={`0 0 ${W} ${H}`} className="km-sparkline" preserveAspectRatio="none">
-      <defs><linearGradient id="sparkfill" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="var(--coca-red)" stopOpacity="0.3"/><stop offset="100%" stopColor="var(--coca-red)" stopOpacity="0"/></linearGradient></defs>
-      <path d={areaD} fill="url(#sparkfill)"/>
-      <path d={pathD} fill="none" stroke="var(--coca-red)" strokeWidth="1.5" strokeLinejoin="round" strokeLinecap="round"/>
+    <svg width={W} height={H} viewBox={`0 0 ${W} ${H}`} style={{overflow:'visible'}}>
+      <polyline points={points} fill="none" stroke="var(--coca-red)" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"/>
     </svg>
   );
 }
 
 // ═══ BIG CURRENCY ═══
-function BigCurrency({value,size='xl'}){
-  const parts=brlFmt.formatToParts(value);
-  let symbol='',integer='',decimal='';
-  for(const p of parts){if(p.type==='currency')symbol=p.value;else if(p.type==='integer'||p.type==='group')integer+=p.value;else if(p.type==='decimal')decimal+=p.value;else if(p.type==='fraction')decimal+=p.value;}
+function BigCurrency({value,size='md'}){
+  const s=brlFmt.format(value);
+  const symbol=s.slice(0,2);
+  const rest=s.slice(2);
+  const[integer,decimal]=rest.split(',');
   return(<span className={`km-big-currency km-big-currency--${size}`}><span className="km-big-currency-symbol">{symbol}</span><span className="km-big-currency-int">{integer}</span><span className="km-big-currency-dec">{decimal}</span></span>);
 }
 
@@ -140,12 +140,9 @@ function Dashboard({trips}){
   },[trips]);
   const totalEarning=stats.totalKm*RATE;
   const now=new Date();
-
   return(
     <div className="km-dash km-fade-up">
-      {/* ROW 1: Hero + Projection (side by side on desktop) */}
       <div className="km-dash-top-grid">
-        {/* HERO METRIC */}
         <section className="km-card km-card--hero">
           <div className="km-aurora"/>
           <header className="km-card-head"><span className="km-mono km-mono-label">[ TOTAL · ALL-TIME ]</span><span className="km-mono km-mono-label">{String(trips.length).padStart(3,'0')}/REC</span></header>
@@ -153,8 +150,6 @@ function Dashboard({trips}){
           <div className="km-hero-meta"><span className="km-mono">{numFmt.format(stats.totalKm)} KM</span><span className="km-divider-vert"/><span className="km-mono km-muted">× R$ 1,14/KM</span></div>
           {stats.last14.some(v=>v>0)&&(<div className="km-hero-spark"><Sparkline values={stats.last14} height={32}/><span className="km-mono km-mono-tiny">14d</span></div>)}
         </section>
-
-        {/* PROJECTION */}
         {stats.projection&&(
           <section className="km-card km-card--projection">
             <div className="km-mono km-mono-label" style={{marginBottom:8}}>◊ PROJEÇÃO · {MONTH_FULL[now.getMonth()].toUpperCase()} {now.getFullYear()}</div>
@@ -165,26 +160,19 @@ function Dashboard({trips}){
           </section>
         )}
       </div>
-
-      {/* ROW 2: Rings + Stats (side by side on tablet+) */}
       <div className="km-dash-mid-grid">
         <section className="km-card km-card--rings">
           <header className="km-card-head"><span className="km-mono km-mono-label">◊ ATIVIDADE · MÊS</span></header>
           <ActivityRings kmProgress={Math.min((stats.currentMonth?.km||0)/1500,1)} moneyProgress={Math.min((stats.currentMonth?.km||0)*RATE/2000,1)} daysProgress={Math.min((stats.currentMonth?.daysCount||0)/22,1)}/>
         </section>
-
         <div className="km-stats-grid">
           <div className="km-stat-tile"><span className="km-mono km-mono-label">[ MÉDIA / DIA ]</span><span className="km-stat-num">{numFmt.format(stats.avgPerDay)}</span><span className="km-mono km-muted km-mono-tiny">KM</span></div>
           <div className="km-stat-tile"><span className="km-mono km-mono-label">[ MELHOR DIA ]</span><span className="km-stat-num">{stats.bestDay?numFmt.format(stats.bestDay.km):'0'}</span><span className="km-mono km-muted km-mono-tiny">{stats.bestDay?.date||'—'}</span></div>
         </div>
       </div>
-
-      {/* PULL QUOTE */}
       {stats.bestDay&&stats.totalKm>0&&(
         <blockquote className="km-pullquote"><p><span className="km-serif km-italic">Maior consumo da rota em </span><span className="km-mono km-pullquote-data">{stats.bestDay.date.slice(3)}</span><span className="km-serif km-italic">.</span></p><cite className="km-mono km-mono-tiny km-muted">— REGISTRO INTERNO · DRIVE LOG</cite></blockquote>
       )}
-
-      {/* ROW 3: By Day + By Month (side by side on desktop) */}
       <div className="km-dash-bottom-grid">
         <section className="km-card">
           <header className="km-card-head km-card-head--bordered"><div className="km-row-tight"><Calendar size={14} strokeWidth={2.4}/><span className="km-mono km-mono-label">POR DIA</span></div><span className="km-mono km-mono-label">{String(stats.days.length).padStart(2,'0')}</span></header>
@@ -194,13 +182,12 @@ function Dashboard({trips}){
             );})}</ul>
           )}
         </section>
-
         <section className="km-card">
           <header className="km-card-head km-card-head--bordered"><div className="km-row-tight"><TrendingUp size={14} strokeWidth={2.4}/><span className="km-mono km-mono-label">POR MÊS</span></div><span className="km-mono km-mono-label">{String(stats.months.length).padStart(2,'0')}</span></header>
           {stats.months.length===0?(<p className="km-empty">Sem dados ainda.</p>):(
-            <ul className="km-month-rows">{stats.months.map((m)=>{const[mm,yy]=m.key.split('/');return(
-              <li key={m.key} className="km-month-row"><div><div className="km-month-title">{MONTH_NAMES[parseInt(mm)-1]} <span className="km-mono km-muted">·{yy}</span></div><div className="km-mono km-mono-tiny km-muted">{m.count} VIAGENS · {numFmt.format(m.km)} KM · {m.daysCount} DIAS</div></div><div className="km-month-money">{brlFmt.format(m.km*RATE)}</div></li>
-            );})}</ul>
+            <ul className="km-month-rows">{stats.months.map(m=>(
+              <li key={m.key} className="km-month-row"><span className="km-month-title">{m.key}</span><span className="km-month-money">{brlFmt.format(m.km*RATE)}</span></li>
+            ))}</ul>
           )}
         </section>
       </div>
@@ -209,17 +196,18 @@ function Dashboard({trips}){
 }
 
 // ═══ SPLASH ═══
-function Splash({exiting}){return(
-  <div className={`km-splash ${exiting?'km-splash--exit':''}`}>
-    <div className="km-splash-grid"/><div className="km-splash-content">
-    <div className="km-splash-mono">[ INIT · {APP_VERSION} ]</div>
-    <h1 className="km-splash-title"><span>DRIVE</span><span className="km-splash-italic">LOG</span></h1>
-    <div className="km-splash-bar"><div className="km-splash-bar-fill"/></div>
-    <div className="km-splash-mono km-splash-mono--small">SYS · BOOT · OK</div>
-  </div></div>
-);}
+function Splash({exiting}){
+  return(
+    <div className={`km-splash ${exiting?'km-splash--exit':''}`}>
+      <div className="km-splash-inner">
+        <div className="km-splash-logo"><span>DRIVE</span><span>LOG</span></div>
+        <div className="km-splash-loader"><div className="km-splash-loader-bar"/></div>
+        <div className="km-splash-meta">V3.2 · COCA-COLA BR · SYS ACTIVE</div>
+      </div>
+    </div>
+  );
+}
 
-// ═══ MAIN APP ═══
 export default function KmTracker(){
   const[origin,setOrigin]=useState({address:'',lat:null,lng:null});
   const[destination,setDestination]=useState({address:'',lat:null,lng:null});
@@ -227,7 +215,8 @@ export default function KmTracker(){
   const[distanceLabel,setDistanceLabel]=useState('');
   const[routeGeometry,setRouteGeometry]=useState(null);
   const[trips,setTrips]=useState([]);
-  const[loading,setLoading]=useState({origin:false,destination:false,distance:false});
+  const[expenses,setExpenses]=useState([]);
+  const[loading,setLoading]=useState({origin:false,destination:false,distance:false,ocr:false});
   const[error,setError]=useState(null);
   const[success,setSuccess]=useState(null);
   const[activeTab,setActiveTab]=useState('history');
@@ -245,12 +234,17 @@ export default function KmTracker(){
   const originDebounce=useRef(null);
   const destDebounce=useRef(null);
   const initialized=useRef(false);
+  const fileInputRef=useRef(null);
   const feedback=useFeedback();
 
   useEffect(()=>{setThemeState(getInitialTheme());setSoundOn(localStorage.getItem(SOUND_KEY)!=='off');setHapticOn(localStorage.getItem(HAPTIC_KEY)!=='off');const t1=setTimeout(()=>setSplashExiting(true),1100);const t2=setTimeout(()=>setSplashGone(true),1700);return()=>{clearTimeout(t1);clearTimeout(t2);};},[]);
   useEffect(()=>{const update=()=>{const d=new Date();setTime(`${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}:${String(d.getSeconds()).padStart(2,'0')}`);};update();const id=setInterval(update,1000);return()=>clearInterval(id);},[]);
-  useEffect(()=>{const loaded=loadTrips();if(loaded&&Array.isArray(loaded))setTrips(loaded);else{setTrips(SEED_TRIPS);saveTrips(SEED_TRIPS);}},[]);
+  useEffect(()=>{
+    const loadedTrips=loadTrips();if(loadedTrips&&Array.isArray(loadedTrips))setTrips(loadedTrips);else{setTrips(SEED_TRIPS);saveTrips(SEED_TRIPS);}
+    const loadedExpenses=loadExpenses();if(loadedExpenses&&Array.isArray(loadedExpenses))setExpenses(loadedExpenses);
+  },[]);
   useEffect(()=>{if(trips.length>0)saveTrips(trips);},[trips]);
+  useEffect(()=>{if(expenses.length>0)saveExpenses(expenses);},[expenses]);
   useEffect(()=>{if(initialized.current)return;initialized.current=true;const fonts=document.createElement('link');fonts.href='https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600;700;800;900&family=Geist+Mono:wght@400;500;700&family=Instrument+Serif:ital@0;1&display=swap';fonts.rel='stylesheet';document.head.appendChild(fonts);const style=document.createElement('style');style.textContent=CSS;document.head.appendChild(style);},[]);
 
   useEffect(()=>{if(origin.lat==null||destination.lat==null){setDistance(null);setDistanceLabel('');setRouteGeometry(null);return;}let cancelled=false;(async()=>{setLoading(s=>({...s,distance:true}));try{const r=await fetch(`https://router.project-osrm.org/route/v1/driving/${origin.lng},${origin.lat};${destination.lng},${destination.lat}?overview=simplified&geometries=geojson`);const data=await r.json();if(cancelled)return;if(data.routes?.length>0){const route=data.routes[0];setDistance(route.distance/1000);setDistanceLabel('rota de carro');setRouteGeometry(route.geometry?.coordinates||null);}else throw new Error();}catch{if(cancelled)return;setDistance(haversineKm(origin.lat,origin.lng,destination.lat,destination.lng));setDistanceLabel('linha reta · rota indisponível');setRouteGeometry([[origin.lng,origin.lat],[destination.lng,destination.lat]]);}finally{if(!cancelled)setLoading(s=>({...s,distance:false}));}})();return()=>{cancelled=true;};},[origin.lat,origin.lng,destination.lat,destination.lng]);
@@ -262,31 +256,61 @@ export default function KmTracker(){
   function clearLocation(w){feedback('tap');(w==='origin'?setOrigin:setDestination)({address:'',lat:null,lng:null});if(w==='origin'){setOriginSuggestions([]);setShowOriginDrop(false);}else{setDestSuggestions([]);setShowDestDrop(false);}}
   function handleSave(){if(!origin.address.trim()||!destination.address.trim()){setError('Preencha origem e destino');feedback('error');return;}const d=new Date();const newTrip={id:'t'+Date.now(),date:`${String(d.getDate()).padStart(2,'0')}/${String(d.getMonth()+1).padStart(2,'0')}/${d.getFullYear()}`,origin:origin.address.trim(),destination:destination.address.trim(),km:distance!=null?Number(distance.toFixed(2)):null,kmLabel:distanceLabel,geometry:routeGeometry};setTrips(prev=>[newTrip,...prev]);setOrigin({address:'',lat:null,lng:null});setDestination({address:'',lat:null,lng:null});setDistance(null);setDistanceLabel('');setRouteGeometry(null);setError(null);setSuccess('Viagem registrada');setTimeout(()=>setSuccess(null),2200);feedback('success');}
   function deleteTrip(id){if(window.confirm('Remover esta viagem?')){setTrips(prev=>prev.filter(t=>t.id!==id));feedback('swoosh');}}
-  function exportToExcel(){if(!trips.length){setError('Nenhuma viagem para exportar');feedback('error');return;}const sorted=[...trips].sort((a,b)=>{const parse=s=>{const[d,m,y]=s.split('/');return new Date(y,m-1,d);};return parse(a.date)-parse(b.date);});const data=[['Data','Origem','Destino'],...sorted.map(t=>[t.date,t.origin,t.destination])];const ws=XLSX.utils.aoa_to_sheet(data);ws['!cols']=[{wch:12},{wch:60},{wch:60}];const wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,ws,'kmadicional');XLSX.writeFile(wb,'lançamento_de_Km.xlsx');setSuccess('Planilha exportada');setTimeout(()=>setSuccess(null),2200);feedback('success');}
+  function deleteExpense(id){if(window.confirm('Remover esta despesa?')){setExpenses(prev=>prev.filter(e=>e.id!==id));feedback('swoosh');}}
+
+  async function handleFileUpload(e){
+    const file=e.target.files[0];if(!file)return;
+    setLoading(s=>({...s,ocr:true}));setTopLoading(true);feedback('tap');
+    const formData=new FormData();formData.append('receipt',file);
+    try{
+      const r=await fetch('http://localhost:3001/api/process-receipt',{method:'POST',body:formData});
+      const data=await r.json();
+      if(data.error)throw new Error(data.error);
+      const newExpense={id:'e'+Date.now(),...data,date:data.data||new Date().toLocaleDateString('pt-BR')};
+      setExpenses(prev=>[newExpense,...prev]);
+      setSuccess(`${data.tipo==='pedagio'?'Pedágio':'Estacionamento'} processado`);
+      setTimeout(()=>setSuccess(null),2200);feedback('success');
+    }catch(err){setError(err.message);feedback('error');}finally{setLoading(s=>({...s,ocr:false}));setTopLoading(false);e.target.value='';}
+  }
+
+  function exportToExcel(){
+    if(!trips.length&&!expenses.length){setError('Sem dados para exportar');feedback('error');return;}
+    const wb=XLSX.utils.book_new();
+    if(trips.length){
+      const sortedTrips=[...trips].sort((a,b)=>{const p=s=>{const[d,m,y]=s.split('/');return new Date(y,m-1,d);};return p(a.date)-p(b.date);});
+      const tripData=[['Data','Origem','Destino','KM','Valor'],...sortedTrips.map(t=>[t.date,t.origin,t.destination,t.km,t.km?t.km*RATE:0])];
+      XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(tripData),'Viagens');
+    }
+    if(expenses.length){
+      const sortedExpenses=[...expenses].sort((a,b)=>{const p=s=>{const[d,m,y]=s.split('/');return new Date(y,m-1,d);};return p(a.date)-p(b.date);});
+      const expData=[['Data','Tipo','Local/Concessionária','Placa','Valor'],...sortedExpenses.map(e=>[e.date,e.tipo,e.concessionaria||e.local||'',e.placa||'',e.valor])];
+      XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(expData),'Despesas');
+    }
+    XLSX.writeFile(wb,'controle_drive_log.xlsx');
+    setSuccess('Planilha exportada');setTimeout(()=>setSuccess(null),2200);feedback('success');
+  }
+
   function handleToggleTheme(){feedback('tap');setThemeState(toggleTheme(theme));}
   function handleToggleSound(){const next=!soundOn;setSoundOn(next);localStorage.setItem(SOUND_KEY,next?'on':'off');if(next)feedback('tap');}
   function handleToggleHaptic(){const next=!hapticOn;setHapticOn(next);localStorage.setItem(HAPTIC_KEY,next?'on':'off');if(next&&'vibrate'in navigator)navigator.vibrate(15);}
   function handleTabSwitch(t){if(t===activeTab)return;feedback('swoosh');if(document.startViewTransition)document.startViewTransition(()=>setActiveTab(t));else setActiveTab(t);}
 
   const totalKm=trips.reduce((s,t)=>s+(t.km||0),0);
-  const totalEarning=totalKm*RATE;
+  const totalExpenses=expenses.reduce((s,e)=>s+(Number(e.valor)||0),0);
+  const totalEarning=totalKm*RATE+totalExpenses;
   const tripsWithKm=trips.filter(t=>t.km!=null).length;
   const canSave=origin.address.trim()&&destination.address.trim();
-  const marqueeText=' · DRIVE LOG · COCA-COLA BR · FROTA · '+numFmt.format(totalKm)+' KM · '+brlFmt.format(totalEarning)+' · '+String(trips.length).padStart(3,'0')+' VIAGENS';
+  const marqueeText=' · DRIVE LOG · COCA-COLA BR · FROTA · '+numFmt.format(totalKm)+' KM · '+brlFmt.format(totalEarning)+' · '+String(trips.length).padStart(3,'0')+' VIAGENS · '+brlFmt.format(totalExpenses)+' DESPESAS';
 
   return(
     <div className="km-app" data-theme={theme}>
       {!splashGone&&<Splash exiting={splashExiting}/>}
       {topLoading&&<div className="km-toploader"/>}
-
-      {/* STATUS BAR */}
       <div className="km-statusbar"><div className="km-statusbar-inner">
         <span className="km-mono km-mono-tiny"><span className="km-status-dot"/> SYS · ONLINE</span>
         <span className="km-mono km-mono-tiny km-muted">{APP_VERSION} · DRIVE LOG</span>
         <span className="km-mono km-mono-tiny">{time}</span>
       </div></div>
-
-      {/* HEADER */}
       <header className="km-header">
         <div className="km-aurora-bg"/><div className="km-grid-overlay"/>
         <div className="km-header-inner">
@@ -301,46 +325,76 @@ export default function KmTracker(){
               <button onClick={handleToggleHaptic} className="km-icon-btn" aria-label="Vibração"><Vibrate size={16} strokeWidth={2.4} style={{opacity:hapticOn?1:0.35}}/></button>
             </div>
           </div>
-          {/* HERO */}
           <div className="km-hero">
             <div className="km-mono km-mono-label"><span className="km-line"/>VALOR A RECEBER</div>
             <div className="km-hero-value"><BigCurrency value={totalEarning} size="hero"/></div>
             <div className="km-hero-meta-row">
               <span className="km-pill"><span className="km-status-dot km-status-dot--green"/><span className="km-mono km-mono-tiny">{numFmt.format(totalKm)} KM TOTAIS</span></span>
-              <span className="km-mono km-mono-tiny km-muted">{String(trips.length).padStart(3,'0')} TRIPS · {String(tripsWithKm).padStart(3,'0')} MED</span>
+              <span className="km-pill"><span className="km-status-dot" style={{background:'var(--text-primary)'}}/><span className="km-mono km-mono-tiny">{brlFmt.format(totalExpenses)} DESPESAS</span></span>
             </div>
           </div>
         </div>
         <svg viewBox="0 0 400 60" preserveAspectRatio="none" className="km-wave"><path d="M0,40 C60,10 120,55 200,30 C280,5 340,50 400,25 L400,60 L0,60 Z" fill="var(--bg-base)"/><path d="M0,40 C60,10 120,55 200,30 C280,5 340,50 400,25" fill="none" stroke="rgba(255,255,255,0.4)" strokeWidth="1"/></svg>
       </header>
-
-      {/* CONTENT */}
       <main className="km-main">
         <div className="km-content-grid">
-          {/* LEFT SIDE: New Trip (on desktop becomes a sticky sidebar) */}
           <div className="km-content-left">
             {error&&(<div className="km-alert km-alert--err km-fade-in"><AlertCircle size={18} strokeWidth={2.4}/><p>{error}</p><button onClick={()=>setError(null)}><X size={14}/></button></div>)}
             {success&&(<div className="km-alert km-alert--ok km-fade-in"><span className="km-status-dot km-status-dot--green"/><p>{success}</p></div>)}
 
             <section className="km-card">
               <header className="km-card-head km-card-head--bordered"><div className="km-row-tight"><span className="km-redbar"/><h2 className="km-h2">Nova viagem</h2></div><span className="km-mono km-mono-tiny km-muted">001/REC</span></header>
-              <div className="km-field"><div className="km-field-head"><label htmlFor="origin-address" className="km-mono km-mono-label"><span className="km-dot km-dot--red"/>· ORIGEM</label>{origin.address&&<button onClick={()=>clearLocation('origin')} className="km-textbtn" aria-label="Limpar endereço de origem">CLEAR</button>}</div><div className="km-autocomplete"><textarea id="origin-address" value={origin.address} onChange={e=>handleAddressInput(e,'origin')} onFocus={()=>originSuggestions.length>0&&setShowOriginDrop(true)} onBlur={()=>setTimeout(()=>setShowOriginDrop(false),200)} placeholder="Digite o endereço de partida" rows={2} className="km-textarea" aria-label="Endereço de origem" aria-describedby="origin-help" aria-autocomplete="list" aria-controls="origin-suggestions"/>{showOriginDrop&&originSuggestions.length>0&&(<ul id="origin-suggestions" className="km-suggestions" role="listbox">{originSuggestions.map((s,i)=>(<li key={i} onMouseDown={()=>selectSuggestion(s,'origin')} className="km-suggestion-item" role="option">{s.label}</li>))}</ul>)}</div><div id="origin-help" className="km-mono km-mono-tiny km-muted" style={{marginTop:'4px'}}>Comece a digitar para autocomplete ou clique abaixo para usar GPS</div><button onClick={()=>capture('origin')} disabled={loading.origin} className="km-btn km-btn--red km-btn--block km-press" aria-label={loading.origin?'Buscando localização de origem':'Capturar localização de origem'}>{loading.origin?<><Loader2 size={15} className="km-spin"/> BUSCANDO…</>:<><MapPin size={15} strokeWidth={2.4}/> CAPTURAR LOCALIZAÇÃO</>}</button></div>
-              <div className="km-connector"><ArrowDown size={11} strokeWidth={2.4}/><div className="km-dashed"/><span className="km-mono km-mono-tiny">DESTINO</span><div className="km-dashed"/></div>
-              <div className="km-field"><div className="km-field-head"><label htmlFor="dest-address" className="km-mono km-mono-label"><Flag size={11} strokeWidth={2.4} fill="currentColor"/>· DESTINO</label>{destination.address&&<button onClick={()=>clearLocation('destination')} className="km-textbtn" aria-label="Limpar endereço de destino">CLEAR</button>}</div><div className="km-autocomplete"><textarea id="dest-address" value={destination.address} onChange={e=>handleAddressInput(e,'destination')} onFocus={()=>destSuggestions.length>0&&setShowDestDrop(true)} onBlur={()=>setTimeout(()=>setShowDestDrop(false),200)} placeholder="Digite o endereço de chegada" rows={2} className="km-textarea" aria-label="Endereço de destino" aria-describedby="dest-help" aria-autocomplete="list" aria-controls="dest-suggestions"/>{showDestDrop&&destSuggestions.length>0&&(<ul id="dest-suggestions" className="km-suggestions" role="listbox">{destSuggestions.map((s,i)=>(<li key={i} onMouseDown={()=>selectSuggestion(s,'destination')} className="km-suggestion-item" role="option">{s.label}</li>))}</ul>)}</div><div id="dest-help" className="km-mono km-mono-tiny km-muted" style={{marginTop:'4px'}}>Comece a digitar para autocomplete ou clique abaixo para usar GPS</div><button onClick={()=>capture('destination')} disabled={loading.destination} className="km-btn km-btn--ink km-btn--block km-press" aria-label={loading.destination?'Buscando localização de destino':'Capturar localização de destino'}>{loading.destination?<><Loader2 size={15} className="km-spin"/> BUSCANDO…</>:<><Flag size={15} strokeWidth={2.4}/> CAPTURAR LOCALIZAÇÃO</>}</button></div>
+              <div className="km-field"><div className="km-field-head"><label htmlFor="origin-address" className="km-mono km-mono-label"><span className="km-dot km-dot--red"/>· ORIGEM</label>{origin.address&&<button onClick={()=>clearLocation('origin')} className="km-textbtn" aria-label="Limpar endereço de origem">CLEAR</button>}</div><div className="km-autocomplete"><textarea id="origin-address" value={origin.address} onChange={e=>handleAddressInput(e,'origin')} onFocus={()=>originSuggestions.length>0&&setShowOriginDrop(true)} onBlur={()=>setTimeout(()=>setShowOriginDrop(false),200)} placeholder="Digite o endereço de partida" rows={2} className="km-textarea" aria-label="Endereço de origem" aria-describedby="origin-help" aria-autocomplete="list" aria-controls="origin-suggestions"/>{showOriginDrop&&originSuggestions.length>0&&(<ul id="origin-suggestions" className="km-suggestions" role="listbox">{originSuggestions.map((s,i)=>(<li key={i} onMouseDown={()=>selectSuggestion(s,'origin')} className="km-suggestion-item" role="option">{s.label}</li>))}</ul>)}</div><div id="origin-help" className="km-mono km-mono-tiny km-muted" style={{marginTop:'4px'}}>Comece a digitar para autocomplete ou clique abaixo para usar GPS</div><button onClick={()=>capture('origin')} disabled={loading.origin} className="km-btn km-btn--ink km-btn--block km-press" aria-label={loading.origin?'Buscando localização de origem':'Capturar localização de origem'}>{loading.origin?<><Loader2 size={15} className="km-spin"/> BUSCANDO…</>:<><MapPin size={15} strokeWidth={2.4}/> CAPTURAR LOCALIZAÇÃO</>}</button></div>
+              <div className="km-dashed" style={{margin:'20px 0'}}/>
+              <div className="km-field"><div className="km-field-head"><label htmlFor="dest-address" className="km-mono km-mono-label"><span className="km-dot km-dot--red"/>· DESTINO</label>{destination.address&&<button onClick={()=>clearLocation('destination')} className="km-textbtn" aria-label="Limpar endereço de destino">CLEAR</button>}</div><div className="km-autocomplete"><textarea id="dest-address" value={destination.address} onChange={e=>handleAddressInput(e,'destination')} onFocus={()=>destSuggestions.length>0&&setShowDestDrop(true)} onBlur={()=>setTimeout(()=>setShowDestDrop(false),200)} placeholder="Digite o endereço de chegada" rows={2} className="km-textarea" aria-label="Endereço de destino" aria-describedby="dest-help" aria-autocomplete="list" aria-controls="dest-suggestions"/>{showDestDrop&&destSuggestions.length>0&&(<ul id="dest-suggestions" className="km-suggestions" role="listbox">{destSuggestions.map((s,i)=>(<li key={i} onMouseDown={()=>selectSuggestion(s,'destination')} className="km-suggestion-item" role="option">{s.label}</li>))}</ul>)}</div><div id="dest-help" className="km-mono km-mono-tiny km-muted" style={{marginTop:'4px'}}>Comece a digitar para autocomplete ou clique abaixo para usar GPS</div><button onClick={()=>capture('destination')} disabled={loading.destination} className="km-btn km-btn--ink km-btn--block km-press" aria-label={loading.destination?'Buscando localização de destino':'Capturar localização de destino'}>{loading.destination?<><Loader2 size={15} className="km-spin"/> BUSCANDO…</>:<><Flag size={15} strokeWidth={2.4}/> CAPTURAR LOCALIZAÇÃO</>}</button></div>
               <div className="km-odometer" role="region" aria-live="polite" aria-label="Informações de distância"><div className="km-odometer-glow"/><div className="km-odometer-grid"/><div className="km-odometer-info"><div className="km-mono km-mono-label km-odometer-label">◊ DISTÂNCIA</div>{distance!=null&&<div className="km-odometer-money" aria-label={`Valor a receber: ${brlFmt.format(distance*RATE)}`}>{brlFmt.format(distance*RATE)}</div>}{distanceLabel&&<div className="km-mono km-mono-tiny km-odometer-sublabel">{distanceLabel}</div>}</div><div className="km-odometer-display">{loading.distance?<Loader2 size={28} className="km-spin" style={{color:'var(--coca-red)'}} aria-label="Calculando distância"/>:distance!=null?<div className="km-odometer-num"><span aria-label={`${numFmt.format(distance)} quilômetros`}>{numFmt.format(distance)}</span><span className="km-odometer-unit">KM</span></div>:<div className="km-odometer-empty">--.--</div>}</div></div>
               <button onClick={handleSave} disabled={!canSave} className="km-btn km-btn--save km-btn--block km-press" aria-label={!canSave?'Preencha origem e destino para registrar viagem':'Registrar viagem'}><Save size={16} strokeWidth={2.4}/> REGISTRAR VIAGEM</button>
             </section>
-          </div>
 
-          {/* RIGHT SIDE: Tabs + Content */}
+            <section className="km-card">
+              <header className="km-card-head km-card-head--bordered"><div className="km-row-tight"><span className="km-redbar"/><h2 className="km-h2">Despesas</h2></div><span className="km-mono km-mono-tiny km-muted">AUTO-SCAN</span></header>
+              <p className="km-mono km-mono-tiny km-muted" style={{marginBottom:12}}>Tire uma foto do recibo de pedágio ou estacionamento para processamento automático.</p>
+              <input type="file" accept="image/*" capture="environment" ref={fileInputRef} onChange={handleFileUpload} style={{display:'none'}}/>
+              <button onClick={()=>fileInputRef.current.click()} disabled={loading.ocr} className="km-btn km-btn--red km-btn--block km-press" style={{padding:'16px'}}>
+                {loading.ocr?<><Loader2 size={18} className="km-spin"/> PROCESSANDO…</>:<><Camera size={18} strokeWidth={2.4}/> ESCANEAR RECIBO</>}
+              </button>
+            </section>
+          </div>
           <div className="km-content-right">
             <div className="km-tabs">
-              <button onClick={()=>handleTabSwitch('history')} className={`km-tab ${activeTab==='history'?'km-tab--active':''}`}><History size={14} strokeWidth={2.4}/> HISTÓRICO</button>
+              <button onClick={()=>handleTabSwitch('history')} className={`km-tab ${activeTab==='history'?'km-tab--active':''}`}><History size={14} strokeWidth={2.4}/> VIAGENS</button>
+              <button onClick={()=>handleTabSwitch('expenses')} className={`km-tab ${activeTab==='expenses'?'km-tab--active':''}`}><FileText size={14} strokeWidth={2.4}/> DESPESAS</button>
               <button onClick={()=>handleTabSwitch('dashboard')} className={`km-tab ${activeTab==='dashboard'?'km-tab--active':''}`}><TrendingUp size={14} strokeWidth={2.4}/> DASHBOARD</button>
             </div>
-
             <div className="km-tabcontent" key={activeTab}>
-              {activeTab==='dashboard'?(<Dashboard trips={trips}/>):(
+              {activeTab==='dashboard'?(<Dashboard trips={trips}/>):activeTab==='expenses'?(
+                <section className="km-card km-fade-up">
+                  <header className="km-card-head km-card-head--bordered"><div className="km-row-tight"><span className="km-redbar"/><h2 className="km-h2">Recibos</h2><span className="km-mono km-mono-tiny km-pill-dark">{String(expenses.length).padStart(2,'0')}</span></div><button onClick={exportToExcel} className="km-btn km-btn--ink km-btn--small km-press"><Download size={13} strokeWidth={2.4}/> EXPORTAR</button></header>
+                  {expenses.length===0?(<p className="km-empty">Nenhum recibo escanerado ainda.</p>):(
+                    <ul className="km-trip-list">{expenses.map((exp)=>(
+                      <li key={exp.id} className="km-trip">
+                        <div className="km-trip-head">
+                          <span className="km-mono km-mono-tiny">{exp.date} <span className="km-muted">·</span> {exp.tipo==='pedagio'?'PEDÁGIO':'ESTACIONAMENTO'}</span>
+                          <div className="km-trip-head-right">
+                            <div className="km-trip-km"><span className="km-trip-km-pill" style={{background:'var(--text-primary)'}}>{brlFmt.format(exp.valor)}</span></div>
+                            <button onClick={()=>deleteExpense(exp.id)} className="km-icon-btn-tiny"><Trash2 size={13}/></button>
+                          </div>
+                        </div>
+                        <div className="km-trip-body">
+                          <div className="km-trip-line">{exp.tipo==='pedagio'?<Navigation size={11} strokeWidth={2.4} className="km-trip-flag"/>:<ParkingCircle size={11} strokeWidth={2.4} className="km-trip-flag"/>}<span>{exp.concessionaria||exp.local}</span></div>
+                          {exp.placa&&<div className="km-trip-line" style={{marginTop:4,fontSize:11}}><span className="km-mono km-muted">PLACA: {exp.placa}</span></div>}
+                        </div>
+                        {exp.processed_image && (
+                          <div className="km-minimap" style={{marginTop:12,height:'auto'}}>
+                            <img src={`http://localhost:3001${exp.processed_image}`} alt="Recibo" style={{width:'100%',display:'block',borderRadius:'4px'}}/>
+                            <div className="km-minimap-label"><span>◊ SCANNER ATIVO</span><a href={`http://localhost:3001${exp.processed_image}`} download className="km-mono" style={{color:'var(--coca-red)',textDecoration:'none'}}>BAIXAR</a></div>
+                          </div>
+                        )}
+                      </li>
+                    ))}</ul>
+                  )}
+                </section>
+              ):(
                 <section className="km-card km-fade-up">
                   <header className="km-card-head km-card-head--bordered"><div className="km-row-tight"><span className="km-redbar"/><h2 className="km-h2">Histórico</h2><span className="km-mono km-mono-tiny km-pill-dark">{String(trips.length).padStart(2,'0')}</span></div><button onClick={exportToExcel} className="km-btn km-btn--ink km-btn--small km-press"><Download size={13} strokeWidth={2.4}/> EXPORTAR</button></header>
                   {trips.length===0?(<p className="km-empty">Nenhuma viagem registrada ainda.</p>):(
@@ -357,8 +411,6 @@ export default function KmTracker(){
             </div>
           </div>
         </div>
-
-        {/* MARQUEE */}
         <div className="km-marquee"><div className="km-marquee-track"><span>{marqueeText}{marqueeText}{marqueeText}</span></div></div>
         <footer className="km-footer"><p>◊ DADOS LOCAIS · CRIPTOGRAFIA NATIVA ◊<br/><span className="km-coca">R$ 1,14 / KM</span> · ~ = NÚMERO APROXIMADO</p></footer>
       </main>
@@ -366,12 +418,7 @@ export default function KmTracker(){
   );
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// CSS — RESPONSIVE BRUTALIST EDITORIAL
-// Breakpoints: mobile default → 640px tablet → 1024px desktop → 1280px wide
-// ═══════════════════════════════════════════════════════════════════════════
 const CSS = `
-/* ─── TOKENS ─── */
 :root {
   --font-display: 'Geist', system-ui, sans-serif;
   --font-mono: 'Geist Mono', 'JetBrains Mono', ui-monospace, monospace;
@@ -391,351 +438,111 @@ const CSS = `
   --transition-fast: 120ms var(--ease-ios);
   --transition-base: 180ms var(--ease-ios);
   --transition-slow: 240ms var(--ease-ios);
+  --coca-red: #E61A27;
+  --coca-red-hover: #CC1723;
+  --coca-red-active: #B3141F;
+  --coca-red-soft: rgba(230,26,39,0.08);
+  --coca-red-glow: rgba(230,26,39,0.25);
+  --status-green: #16A34A;
 }
 @media(min-width:640px){ :root { --container-max: 680px; --gutter: 24px; } }
 @media(min-width:1024px){ :root { --container-max: 960px; --gutter: 32px; } }
 @media(min-width:1280px){ :root { --container-max: 1120px; --gutter: 40px; } }
-
 [data-theme="light"] {
   --bg-base:#FAFAFA;--bg-surface:#FFFFFF;--bg-elevated:#F5F5F5;--bg-overlay:#ECECEC;--bg-dark:#0A0A0A;
-  --text-primary:#09090B;--text-secondary:#52525B;--text-muted:#71717A;
-  --border-subtle:#D4D4D8;--border-default:#A1A1AA;--border-strong:#0A0A0A;
-  --coca-red:#E61A27;--coca-red-hover:#D11620;--coca-red-active:#B80F1B;
-  --coca-red-glow:rgba(230,26,39,0.18);--coca-red-soft:rgba(230,26,39,0.08);
-  --status-green:#16A34A;--map-grid:rgba(10,9,8,0.06);
-  --aurora:radial-gradient(ellipse 70% 60% at 50% -20%,rgba(230,26,39,0.08),transparent 70%);
+  --text-primary:#0A0A0A;--text-secondary:#404040;--text-muted:#737373;
+  --border-default:#E5E5E5;--border-strong:#D4D4D4;--border-subtle:#F0F0F0;
+  --map-grid: rgba(0,0,0,0.05);
 }
 [data-theme="dark"] {
-  --bg-base:#0A0A0A;--bg-surface:#111111;--bg-elevated:#1A1A1A;--bg-overlay:#242424;--bg-dark:#050505;
-  --text-primary:#EDEDED;--text-secondary:#A1A1AA;--text-muted:#71717A;
-  --border-subtle:#1F1F1F;--border-default:#2A2A2A;--border-strong:#EDEDED;
-  --coca-red:#FF4D5A;--coca-red-hover:#FF6670;--coca-red-active:#E63B47;
-  --coca-red-glow:rgba(255,77,90,0.22);--coca-red-soft:rgba(255,77,90,0.10);
-  --status-green:#4ADE80;--map-grid:rgba(255,255,255,0.06);
-  --aurora:radial-gradient(ellipse 70% 60% at 50% -20%,rgba(255,77,90,0.12),transparent 70%);
+  --bg-base:#0A0A0A;--bg-surface:#121212;--bg-elevated:#1A1A1A;--bg-overlay:#262626;--bg-dark:#000000;
+  --text-primary:#F5F5F5;--text-secondary:#A3A3A3;--text-muted:#737373;
+  --border-default:#262626;--border-strong:#404040;--border-subtle:#1A1A1A;
+  --map-grid: rgba(255,255,255,0.05);
 }
-
-*{box-sizing:border-box;}
-*,.numeric{font-variant-numeric:tabular-nums lining-nums slashed-zero;font-feature-settings:'tnum' 1,'lnum' 1,'zero' 1;}
-html,body{margin:0;padding:0;background:var(--bg-base);}
-body{font-family:var(--font-body);color:var(--text-primary);-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale;}
-
-/* ─── ANIMATIONS ─── */
-@keyframes fadeUp{from{opacity:0;transform:translateY(10px);}to{opacity:1;transform:translateY(0);}}
-@keyframes slideDown{from{opacity:0;transform:translateY(-8px);}to{opacity:1;transform:translateY(0);}}
-@keyframes fadeIn{from{opacity:0;}to{opacity:1;}}
-@keyframes spin{from{transform:rotate(0);}to{transform:rotate(360deg);}}
-@keyframes pulse{0%,49%{opacity:1;}50%,100%{opacity:0.35;}}
-@keyframes marquee{from{transform:translateX(0);}to{transform:translateX(-33.33%);}}
-@keyframes splashIn{from{opacity:0;transform:scale(0.95);}to{opacity:1;transform:scale(1);}}
-@keyframes splashBar{0%{width:0;}100%{width:100%;}}
-@keyframes routeDash{from{stroke-dashoffset:200;}to{stroke-dashoffset:0;}}
-@keyframes loaderSlide{0%{transform:translateX(-100%);}100%{transform:translateX(100%);}}
-@media(prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:0.01ms !important;transition-duration:0.01ms !important;}}
-.km-fade-up{animation:fadeUp 0.4s var(--ease-ios) both;}
-.km-fade-in{animation:fadeIn 0.3s var(--ease-ios) both;}
-.km-spin{animation:spin 1s linear infinite;}
-
-/* ─── APP SHELL ─── */
-.km-app{background:var(--bg-base);color:var(--text-primary);min-height:100vh;font-family:var(--font-body);position:relative;overflow-x:hidden;}
-
-/* ─── SPLASH ─── */
-.km-splash{position:fixed;inset:0;z-index:9999;background:var(--coca-red);display:flex;align-items:center;justify-content:center;transition:opacity 0.55s var(--ease-ios),transform 0.55s var(--ease-ios);}
-.km-splash--exit{opacity:0;transform:scale(1.04);pointer-events:none;}
-.km-splash-grid{position:absolute;inset:0;background-image:linear-gradient(rgba(255,255,255,0.18) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,0.18) 1px,transparent 1px);background-size:32px 32px;opacity:0.4;}
-.km-splash-content{position:relative;text-align:center;color:#FFF;animation:splashIn 0.5s var(--ease-out-expo) both;}
-.km-splash-mono{font-family:var(--font-mono);font-size:11px;letter-spacing:0.32em;opacity:0.75;text-transform:uppercase;margin-bottom:18px;}
-.km-splash-mono--small{margin-top:22px;opacity:0.6;}
-.km-splash-title{font-family:var(--font-display);font-weight:900;font-size:64px;line-height:0.85;letter-spacing:-0.05em;display:flex;flex-direction:column;align-items:center;margin:0;}
-.km-splash-italic{font-family:var(--font-serif);font-style:italic;font-weight:400;font-size:56px;margin-top:-4px;}
-.km-splash-bar{width:180px;height:2px;background:rgba(255,255,255,0.2);margin:22px auto 0;overflow:hidden;}
-.km-splash-bar-fill{height:100%;background:#FFF;animation:splashBar 1.1s var(--ease-out-expo) both;}
-@media(min-width:640px){.km-splash-title{font-size:80px;}.km-splash-italic{font-size:72px;}.km-splash-bar{width:240px;}}
-@media(min-width:1024px){.km-splash-title{font-size:100px;}.km-splash-italic{font-size:88px;}}
-
-/* ─── TOP LOADER ─── */
-.km-toploader{position:fixed;top:0;left:0;right:0;height:2px;background:linear-gradient(90deg,transparent,var(--coca-red),transparent);z-index:9998;animation:loaderSlide 1.2s linear infinite;}
-
-/* ─── STATUS BAR ─── */
-.km-statusbar{background:var(--bg-dark);border-bottom:1px solid var(--border-subtle);}
-.km-statusbar-inner{max-width:var(--container-max);margin:0 auto;padding:6px var(--gutter);display:flex;justify-content:space-between;align-items:center;color:rgba(255,255,255,0.65);}
-.km-status-dot{display:inline-block;width:6px;height:6px;background:var(--status-green);border-radius:50%;box-shadow:0 0 6px var(--status-green);animation:pulse 1.5s step-end infinite;margin-right:6px;vertical-align:middle;}
-.km-status-dot--green{background:var(--status-green);}
-
-/* ─── HEADER ─── */
-.km-header{position:relative;background:var(--bg-base);border-bottom:2px solid var(--border-strong);padding:0 0 64px;overflow:hidden;}
-.km-aurora-bg{position:absolute;inset:0;background:var(--aurora);pointer-events:none;}
-.km-grid-overlay{position:absolute;inset:0;background-image:linear-gradient(var(--map-grid) 1px,transparent 1px),linear-gradient(90deg,var(--map-grid) 1px,transparent 1px);background-size:28px 28px;pointer-events:none;opacity:0.6;}
-.km-header>*{position:relative;z-index:1;}
-.km-header-inner{max-width:var(--container-max);margin:0 auto;padding:22px var(--gutter) 0;}
-.km-header-top{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:24px;}
-.km-header-actions{display:flex;gap:6px;}
-@media(min-width:640px){.km-header-actions{gap:8px;}}
-
-.km-icon-btn{width:36px;height:36px;background:var(--bg-surface);border:1.5px solid var(--border-strong);border-radius:0;cursor:pointer;display:flex;align-items:center;justify-content:center;color:var(--text-primary);box-shadow:2px 2px 0 0 var(--border-strong);transition:transform 120ms var(--ease-ios),box-shadow 120ms var(--ease-ios);}
-.km-icon-btn:active{transform:translate(2px,2px);box-shadow:0 0 0 0 var(--border-strong);}
-@media(min-width:640px){.km-icon-btn{width:40px;height:40px;}}
-
-.km-h1{font-family:var(--font-display);font-weight:900;font-size:clamp(44px,12vw,72px);line-height:0.85;letter-spacing:-0.045em;margin:8px 0 0;display:flex;flex-direction:column;}
-.km-h1-italic{font-family:var(--font-serif);font-style:italic;font-weight:400;font-size:clamp(34px,9vw,56px);margin-top:-8px;color:var(--coca-red);}
-@media(min-width:1024px){.km-h1{font-size:clamp(56px,5vw,80px);}.km-h1-italic{font-size:clamp(44px,4vw,64px);}}
-
-.km-hero{margin-top:12px;}
-.km-line{display:inline-block;width:18px;height:1.5px;background:var(--text-primary);margin-right:8px;vertical-align:middle;}
-.km-hero-value{margin-top:6px;}
-.km-hero-meta-row{margin-top:14px;display:flex;align-items:center;gap:12px;flex-wrap:wrap;}
-.km-pill{display:inline-flex;align-items:center;padding:5px 11px;border:1.5px solid var(--border-strong);background:var(--bg-surface);box-shadow:2px 2px 0 0 var(--border-strong);}
-.km-wave{position:absolute;bottom:-1px;left:0;width:100%;height:56px;display:block;z-index:1;}
-
-/* ─── BIG CURRENCY ─── */
-.km-big-currency{display:inline-flex;align-items:baseline;font-family:var(--font-display);font-weight:900;letter-spacing:-0.05em;line-height:0.9;}
-.km-big-currency-symbol{font-size:0.32em;font-weight:700;color:var(--text-secondary);margin-right:0.18em;align-self:flex-start;margin-top:0.18em;}
-.km-big-currency-int{font-size:1em;color:var(--text-primary);}
-.km-big-currency-dec{font-size:0.42em;font-weight:700;color:var(--text-secondary);margin-left:0.04em;}
-.km-big-currency--hero{font-size:clamp(48px,13vw,96px);}
-.km-big-currency--xl{font-size:clamp(40px,10vw,72px);}
-.km-big-currency--md{font-size:clamp(32px,8vw,52px);}
-@media(min-width:1024px){.km-big-currency--hero{font-size:clamp(64px,5vw,96px);}.km-big-currency--xl{font-size:clamp(52px,4vw,72px);}}
-
-/* ─── MAIN ─── */
-.km-main{max-width:var(--container-max);margin:-28px auto 0;padding:0 var(--gutter) 40px;position:relative;z-index:5;}
-
-/* ─── CONTENT GRID (sidebar layout on desktop) ─── */
+body{margin:0;padding:0;background:var(--bg-base);color:var(--text-primary);font-family:var(--font-body);-webkit-font-smoothing:antialiased;overflow-x:hidden;}
+.km-app{min-height:100vh;display:flex;flex-direction:column;background:var(--bg-base);transition:background-color var(--transition-base),color var(--transition-base);}
+.km-toploader{position:fixed;top:0;left:0;right:0;height:3px;background:var(--coca-red);z-index:2000;animation:loadingBar 2s infinite ease-in-out;}
+@keyframes loadingBar{0%{transform:translateX(-100%);}100%{transform:translateX(100%);}}
+.km-statusbar{background:var(--bg-dark);color:#FFF;padding:6px 0;border-bottom:1px solid var(--border-strong);position:relative;z-index:100;}
+.km-statusbar-inner{max-width:var(--container-max);margin:0 auto;padding:0 var(--gutter);display:flex;justify-content:space-between;align-items:center;}
+.km-status-dot{width:6px;height:6px;background:var(--status-green);border-radius:50%;display:inline-block;margin-right:4px;box-shadow:0 0 8px var(--status-green);}
+.km-status-dot--green{background:var(--status-green);box-shadow:0 0 8px var(--status-green);}
+.km-header{background:var(--bg-dark);color:#FFF;padding:40px 0 60px;position:relative;overflow:hidden;}
+.km-header-inner{max-width:var(--container-max);margin:0 auto;padding:0 var(--gutter);position:relative;z-index:2;}
+.km-header-top{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:32px;}
+.km-header-actions{display:flex;gap:12px;}
+.km-h1{font-family:var(--font-display);font-weight:900;font-size:38px;letter-spacing:-0.05em;line-height:0.85;margin:8px 0 0;text-transform:uppercase;}
+.km-h1 span{display:block;}
+.km-h1-italic{font-family:var(--font-serif);font-style:italic;font-weight:400;text-transform:lowercase;letter-spacing:-0.02em;color:var(--coca-red);margin-left:4px;}
+.km-hero{margin-top:24px;}
+.km-hero-value{margin:8px 0 12px;}
+.km-hero-meta-row{display:flex;align-items:center;gap:12px;flex-wrap:wrap;}
+.km-pill{background:rgba(255,255,255,0.1);padding:4px 10px;border-radius:100px;display:inline-flex;align-items:center;gap:6px;border:1px solid rgba(255,255,255,0.1);}
+.km-big-currency{font-family:var(--font-display);font-weight:900;line-height:1;display:inline-flex;align-items:baseline;letter-spacing:-0.04em;}
+.km-big-currency--hero{font-size:72px;}
+.km-big-currency--xl{font-size:48px;}
+.km-big-currency--md{font-size:32px;}
+.km-big-currency-symbol{font-size:0.4em;margin-right:4px;color:var(--coca-red);}
+.km-big-currency-dec{font-size:0.5em;opacity:0.6;margin-left:2px;}
+.km-wave{position:absolute;bottom:0;left:0;width:100%;height:60px;z-index:1;}
+.km-main{max-width:var(--container-max);margin:-30px auto 40px;padding:0 var(--gutter);position:relative;z-index:10;}
 .km-content-grid{display:flex;flex-direction:column;gap:14px;}
 @media(min-width:1024px){
   .km-content-grid{flex-direction:row;gap:24px;align-items:flex-start;}
   .km-content-left{width:380px;flex-shrink:0;position:sticky;top:16px;}
   .km-content-right{flex:1;min-width:0;}
 }
-@media(min-width:1280px){
-  .km-content-left{width:420px;}
-}
-
-/* ─── ALERTS ─── */
-.km-alert{display:flex;align-items:center;gap:10px;padding:12px 14px;border:1.5px solid var(--border-strong);border-radius:var(--radius-md);background:var(--bg-surface);margin-bottom:12px;box-shadow:var(--shadow-md);font-size:13px;font-weight:500;animation:slideDown 0.3s var(--ease-ios);}
-.km-alert p{margin:0;flex:1;line-height:1.4;}
-.km-alert button{background:none;border:none;cursor:pointer;color:var(--text-primary);padding:4px;border-radius:var(--radius-sm);transition:background-color var(--transition-fast);}
-.km-alert button:hover{background-color:rgba(0,0,0,0.05);}
-.km-alert button:focus-visible{outline:var(--focus-ring);outline-offset:2px;}
-.km-alert--err{border-color:var(--coca-red);background:rgba(230,26,39,0.04);color:var(--coca-red);}
-.km-alert--ok{border-color:var(--status-green);background:rgba(22,163,74,0.04);color:var(--status-green);}
-
-/* ─── CARD ─── */
-.km-card{background:var(--bg-surface);border:1.5px solid var(--border-strong);border-radius:var(--radius-lg);padding:18px;margin-bottom:16px;box-shadow:var(--shadow-md);position:relative;transition:box-shadow var(--transition-base),border-color var(--transition-base);}
-.km-card:hover{box-shadow:var(--shadow-lg);}
-@media(min-width:640px){.km-card{padding:24px;}}
-@media(min-width:1024px){.km-card{padding:28px;}}
+.km-card{background:var(--bg-surface);border:1.5px solid var(--border-strong);border-radius:var(--radius-lg);padding:18px;margin-bottom:16px;box-shadow:var(--shadow-md);position:relative;}
 .km-card-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;}
 .km-card-head--bordered{padding-bottom:12px;border-bottom:1.5px solid var(--border-default);}
-.km-row-tight{display:flex;align-items:center;gap:8px;}
-.km-redbar{display:inline-block;width:4px;height:22px;background:var(--coca-red);}
 .km-h2{font-family:var(--font-display);font-weight:800;font-size:22px;letter-spacing:-0.035em;line-height:1;margin:0;}
-@media(min-width:640px){.km-h2{font-size:26px;}}
-
-/* ─── MONO / LABELS ─── */
+.km-redbar{display:inline-block;width:4px;height:22px;background:var(--coca-red);}
+.km-row-tight{display:flex;align-items:center;gap:8px;}
 .km-mono{font-family:var(--font-mono);font-weight:500;}
 .km-mono-label{font-size:10.5px;letter-spacing:0.16em;text-transform:uppercase;color:var(--text-primary);font-weight:600;display:inline-flex;align-items:center;gap:6px;}
 .km-mono-tiny{font-size:10px;letter-spacing:0.12em;text-transform:uppercase;}
 .km-muted{color:var(--text-muted);}
-.km-coca{color:var(--coca-red);font-weight:700;}
-.km-italic{font-style:italic;}
-.km-serif{font-family:var(--font-serif);}
-
-/* ─── FIELDS ─── */
-.km-field{margin-bottom:16px;}
-.km-field-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;}
-.km-textbtn{font-family:var(--font-mono);font-size:10px;letter-spacing:0.1em;color:var(--text-muted);background:none;border:none;cursor:pointer;padding:4px 6px;font-weight:500;transition:color var(--transition-fast);border-radius:var(--radius-sm);}
-.km-textbtn:hover{color:var(--text-primary);}
-.km-textbtn:focus-visible{outline:var(--focus-ring);outline-offset:2px;}
-.km-textarea{width:100%;padding:11px 13px;font-size:14px;font-family:var(--font-body);color:var(--text-primary);background:var(--bg-base);border:1.5px solid var(--border-default);border-radius:var(--radius-md);resize:none;outline:none;line-height:1.45;font-weight:500;transition:border-color var(--transition-base),box-shadow var(--transition-base),background-color var(--transition-base);box-sizing:border-box;}
-.km-textarea:hover{border-color:var(--coca-red-glow);background-color:var(--coca-red-soft);}
-.km-textarea:focus{border-color:var(--coca-red);box-shadow:inset 0 0 0 1px var(--coca-red),0 0 0 3px var(--coca-red-soft);outline:none;}
-.km-textarea:disabled{opacity:0.6;cursor:not-allowed;}
-.km-autocomplete{position:relative;}
-.km-suggestions{position:absolute;top:calc(100% + 4px);left:0;right:0;z-index:50;background:var(--bg-surface);border:1.5px solid var(--border-default);border-radius:var(--radius-md);list-style:none;margin:0;padding:4px 0;max-height:240px;overflow-y:auto;box-shadow:var(--shadow-lg);animation:fadeUp 0.2s var(--ease-ios);transform-origin:top;}
-.km-suggestion-item{padding:10px 13px;font-size:13px;font-family:var(--font-body);color:var(--text-primary);cursor:pointer;border-bottom:1px solid var(--border-subtle);line-height:1.4;transition:background-color var(--transition-fast),color var(--transition-fast);}
-.km-suggestion-item:last-child{border-bottom:none;}
-.km-suggestion-item:hover{background:var(--coca-red-soft);color:var(--coca-red);font-weight:600;}
-.km-suggestion-item:focus-visible{outline:var(--focus-ring);outline-offset:-2px;}
-.km-dot{display:inline-block;width:9px;height:9px;flex-shrink:0;}
-.km-dot--red{background:radial-gradient(circle at 30% 30%,var(--coca-red),var(--coca-red-active));border-radius:50%;box-shadow:0 0 0 3px var(--coca-red-soft);}
-
-/* ─── BUTTONS ─── */
-.km-btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;padding:11px 14px;border:1.5px solid var(--border-strong);border-radius:var(--radius-md);cursor:pointer;font-family:var(--font-display);font-weight:700;font-size:12px;letter-spacing:0.06em;text-transform:uppercase;background:var(--bg-surface);color:var(--text-primary);box-shadow:var(--shadow-sm);transition:transform var(--transition-fast),box-shadow var(--transition-fast),background var(--transition-fast),color var(--transition-fast);outline:none;}
-.km-btn:hover:not(:disabled){transform:translateY(-2px);box-shadow:var(--shadow-md);}
-.km-btn:focus-visible{outline:var(--focus-ring);outline-offset:2px;}
-.km-btn:active:not(:disabled){transform:translateY(0px);box-shadow:var(--shadow-sm);}
-.km-btn:disabled{opacity:0.45;cursor:not-allowed;}
-.km-btn--block{width:100%;margin-top:8px;}
-.km-btn--small{padding:8px 12px;font-size:11px;}
+.km-btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;padding:11px 14px;border:1.5px solid var(--border-strong);border-radius:var(--radius-md);cursor:pointer;font-family:var(--font-display);font-weight:700;font-size:12px;letter-spacing:0.06em;text-transform:uppercase;background:var(--bg-surface);color:var(--text-primary);transition:all var(--transition-fast);}
+.km-btn--block{width:100%;}
 .km-btn--red{background:var(--coca-red);color:#FFF;border-color:var(--coca-red);}
-.km-btn--red:hover:not(:disabled){background:var(--coca-red-hover);}
-.km-btn--red:active:not(:disabled){background:var(--coca-red-active);}
 .km-btn--ink{background:var(--text-primary);color:var(--bg-base);border-color:var(--text-primary);}
-.km-btn--ink:hover:not(:disabled){opacity:0.9;}
-.km-btn--save{background:var(--coca-red);color:#FFF;font-size:14px;padding:14px;margin-top:16px;border:2px solid var(--coca-red);border-radius:var(--radius-md);box-shadow:var(--shadow-md);letter-spacing:0.08em;font-weight:800;}
-.km-btn--save:hover:not(:disabled){transform:translateY(-2px);box-shadow:var(--shadow-lg);}
-.km-btn--save:focus-visible{outline:var(--focus-ring);outline-offset:2px;}
-.km-btn--save:active:not(:disabled){transform:translateY(0px);}
-.km-btn--press{cursor:pointer;}
-
-/* ─── CONNECTOR ─── */
-.km-connector{display:flex;align-items:center;gap:8px;padding:6px 0;color:var(--text-muted);}
-.km-dashed{flex:1;height:1px;background:repeating-linear-gradient(90deg,var(--border-default) 0 4px,transparent 4px 8px);}
-
-/* ─── ODOMETER ─── */
-.km-odometer{background:var(--bg-dark);border:1.5px solid var(--border-strong);border-radius:var(--radius-lg);padding:16px 18px;margin:16px 0 16px;display:flex;align-items:center;justify-content:space-between;position:relative;overflow:hidden;box-shadow:var(--shadow-lg);transition:box-shadow var(--transition-base);}
-.km-odometer:hover{box-shadow:var(--shadow-lg),inset 0 0 0 1px var(--coca-red-glow);}
-.km-odometer-glow{position:absolute;top:-40px;right:-40px;width:140px;height:140px;border-radius:50%;background:radial-gradient(circle,var(--coca-red-glow),transparent 70%);pointer-events:none;}
-.km-odometer-grid{position:absolute;inset:0;background-image:linear-gradient(rgba(255,255,255,0.06) 1px,transparent 1px);background-size:100% 12px;pointer-events:none;}
-.km-odometer-info{position:relative;z-index:2;}
-.km-odometer-label{color:rgba(255,255,255,0.6);letter-spacing:0.22em;}
-.km-odometer-money{font-family:var(--font-mono);font-size:11px;color:var(--coca-red);font-weight:600;margin-top:4px;letter-spacing:0.04em;}
-.km-odometer-sublabel{color:rgba(255,255,255,0.4);margin-top:3px;font-style:italic;}
-.km-odometer-display{position:relative;z-index:2;}
-.km-odometer-num{display:flex;align-items:baseline;gap:6px;font-family:var(--font-mono);font-weight:700;font-size:36px;color:#FFF;line-height:1;letter-spacing:-0.02em;text-shadow:0 0 18px var(--coca-red-glow);}
-.km-odometer-unit{font-family:var(--font-display);font-size:14px;color:var(--coca-red);font-weight:800;letter-spacing:0.04em;font-style:italic;}
-.km-odometer-empty{font-family:var(--font-mono);font-size:28px;color:rgba(255,255,255,0.22);font-weight:500;}
-@media(min-width:640px){.km-odometer{padding:20px 24px;}.km-odometer-num{font-size:42px;}}
-
-/* ─── TABS ─── */
-.km-tabs{display:flex;background:var(--bg-surface);border:1.5px solid var(--border-default);border-radius:var(--radius-md);margin-bottom:16px;box-shadow:var(--shadow-sm);position:relative;z-index:1;padding:2px;}
-.km-tab{flex:1;padding:10px 12px;background:transparent;border:none;border-radius:var(--radius-sm);cursor:pointer;font-family:var(--font-display);font-weight:700;font-size:11.5px;letter-spacing:0.08em;color:var(--text-muted);display:flex;align-items:center;justify-content:center;gap:6px;transition:all var(--transition-base);text-transform:uppercase;}
-.km-tab:hover:not(.km-tab--active){background:var(--coca-red-soft);color:var(--text-primary);}
-.km-tab:focus-visible{outline:var(--focus-ring);outline-offset:2px;}
-.km-tab--active{background:var(--coca-red);color:#FFF;box-shadow:var(--shadow-sm);}
-@media(min-width:640px){.km-tab{padding:12px 16px;font-size:12px;}}
-.km-tabcontent{animation:fadeUp 0.35s var(--ease-ios) both;}
-
-/* ─── HISTORY ─── */
+.km-btn--save{background:var(--coca-red);color:#FFF;font-size:14px;padding:14px;margin-top:16px;border:2px solid var(--coca-red);font-weight:800;}
+.km-textarea{width:100%;padding:11px 13px;font-size:14px;font-family:var(--font-body);color:var(--text-primary);background:var(--bg-base);border:1.5px solid var(--border-default);border-radius:var(--radius-md);resize:none;outline:none;line-height:1.45;box-sizing:border-box;}
+.km-tabs{display:flex;background:var(--bg-surface);border:1.5px solid var(--border-default);border-radius:var(--radius-md);margin-bottom:16px;padding:2px;}
+.km-tab{flex:1;padding:10px 12px;background:transparent;border:none;border-radius:var(--radius-sm);cursor:pointer;font-family:var(--font-display);font-weight:700;font-size:11px;color:var(--text-muted);display:flex;align-items:center;justify-content:center;gap:6px;text-transform:uppercase;transition:all var(--transition-base);}
+.km-tab--active{background:var(--coca-red);color:#FFF;}
 .km-trip-list{list-style:none;padding:0;margin:0;}
-.km-trip{padding:14px 0 10px;border-bottom:1px solid var(--border-default);}
-.km-trip:first-child{padding-top:4px;}
-.km-trip:last-child{border-bottom:2px solid var(--border-strong);padding-bottom:14px;}
+.km-trip{padding:14px 0;border-bottom:1px solid var(--border-default);}
 .km-trip-head{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:9px;}
 .km-trip-head-right{display:flex;align-items:center;gap:8px;}
-.km-trip-km{display:flex;flex-direction:column;align-items:flex-end;gap:3px;}
-.km-trip-km-pill{font-family:var(--font-mono);font-size:10.5px;font-weight:700;background:var(--coca-red);color:#FFF;padding:3px 9px;letter-spacing:0.04em;border:1.5px solid var(--border-strong);box-shadow:2px 2px 0 0 var(--border-strong);}
-.km-trip-km-money{color:var(--status-green);font-weight:600;}
-.km-icon-btn-tiny{background:none;border:none;cursor:pointer;color:var(--text-muted);padding:3px;display:flex;}
-.km-icon-btn-tiny:hover{color:var(--coca-red);}
-.km-trip-body{font-size:13px;line-height:1.5;color:var(--text-secondary);font-weight:500;}
+.km-trip-km-pill{font-family:var(--font-mono);font-size:10.5px;font-weight:700;background:var(--coca-red);color:#FFF;padding:3px 9px;border:1.5px solid var(--border-strong);}
+.km-trip-body{font-size:13px;line-height:1.5;color:var(--text-secondary);}
 .km-trip-line{display:flex;gap:10px;align-items:flex-start;}
-.km-trip-line span:first-child{margin-top:5px;}
-.km-trip-vline{margin-left:3.5px;height:11px;width:1px;background:var(--border-default);margin-top:1px;margin-bottom:1px;}
-.km-trip-flag{margin-top:4px;flex-shrink:0;color:var(--text-primary);}
-
-/* ─── MINI MAP ─── */
+.km-trip-vline{margin-left:3.5px;height:11px;width:1px;background:var(--border-default);}
 .km-minimap{position:relative;margin-top:10px;border:1.5px solid var(--border-strong);background:var(--bg-elevated);overflow:hidden;}
-.km-minimap svg{display:block;width:100%;height:100px;}
-@media(min-width:640px){.km-minimap svg{height:120px;}}
-@media(min-width:1024px){.km-minimap svg{height:140px;}}
-.km-minimap-label{position:absolute;top:6px;left:8px;right:8px;display:flex;justify-content:space-between;font-family:var(--font-mono);font-size:9px;letter-spacing:0.14em;color:var(--text-muted);text-transform:uppercase;pointer-events:none;}
-.km-mini-empty{margin-top:10px;height:78px;background:repeating-linear-gradient(45deg,var(--bg-elevated),var(--bg-elevated) 8px,var(--bg-overlay) 8px,var(--bg-overlay) 16px);display:flex;align-items:center;justify-content:center;border:1.5px dashed var(--border-default);}
-.km-mini-empty span{font-family:var(--font-mono);font-size:10px;color:var(--text-muted);letter-spacing:0.14em;text-transform:uppercase;}
-.km-route-dash{stroke-dasharray:200;animation:routeDash 1.4s var(--ease-out-expo) forwards;}
-
-/* ─── DASHBOARD GRIDS ─── */
-.km-dash{display:block;}
-.km-dash-top-grid{display:flex;flex-direction:column;gap:14px;}
-.km-dash-mid-grid{display:flex;flex-direction:column;gap:14px;}
-.km-dash-bottom-grid{display:flex;flex-direction:column;gap:14px;}
-
-@media(min-width:640px){
-  .km-dash-top-grid{flex-direction:row;gap:14px;}
-  .km-dash-top-grid > *{flex:1;min-width:0;}
-  .km-dash-mid-grid{flex-direction:row;gap:14px;align-items:stretch;}
-  .km-dash-mid-grid .km-card--rings{flex:1.2;}
-  .km-dash-mid-grid .km-stats-grid{flex:0.8;}
-}
-
-@media(min-width:1024px){
-  .km-dash-bottom-grid{flex-direction:row;gap:14px;}
-  .km-dash-bottom-grid > *{flex:1;min-width:0;}
-}
-
-/* HERO CARD */
-.km-card--hero{position:relative;overflow:hidden;}
-.km-aurora{position:absolute;top:-40px;right:-30px;width:200px;height:200px;background:radial-gradient(circle,var(--coca-red-glow),transparent 70%);pointer-events:none;}
-.km-card--hero>*{position:relative;z-index:1;}
-.km-hero-amount{margin:12px 0 14px;display:flex;letter-spacing:-0.05em;}
-.km-hero-meta{display:flex;align-items:center;gap:10px;flex-wrap:wrap;font-size:11.5px;color:var(--text-secondary);}
-.km-divider-vert{display:inline-block;width:1px;height:12px;background:var(--border-default);}
-.km-hero-spark{margin-top:14px;display:flex;align-items:center;gap:10px;}
-.km-sparkline{flex:1;height:32px;width:100%;}
-@media(min-width:640px){.km-sparkline{height:40px;}}
-
-.km-card--projection{background:var(--bg-elevated);}
-.km-projection-content{margin-top:8px;}
-
-/* RINGS */
-.km-card--rings{padding-bottom:24px;}
-.km-rings{display:flex;align-items:center;gap:18px;margin-top:14px;flex-wrap:wrap;justify-content:center;}
-.km-rings-svg{width:160px;height:160px;flex-shrink:0;}
-@media(min-width:640px){.km-rings-svg{width:180px;height:180px;}}
-@media(min-width:1024px){.km-rings-svg{width:200px;height:200px;}}
-.km-rings-legend{flex:1;min-width:120px;display:flex;flex-direction:column;gap:8px;}
-.km-rings-legend-row{display:flex;align-items:center;gap:8px;font-family:var(--font-mono);font-size:11px;}
-.km-rings-dot{width:8px;height:8px;border-radius:50%;}
-.km-rings-legend-label{flex:1;letter-spacing:0.12em;color:var(--text-secondary);text-transform:uppercase;}
-.km-rings-legend-pct{font-weight:700;color:var(--text-primary);letter-spacing:0.04em;}
-
-/* STATS GRID */
-.km-stats-grid{display:grid;grid-template-columns:1fr 1fr;gap:0;border:1.5px solid var(--border-strong);background:var(--bg-surface);margin-bottom:14px;box-shadow:4px 4px 0 0 var(--border-strong);}
-@media(min-width:640px){.km-stats-grid{margin-bottom:0;align-self:stretch;}}
-.km-stat-tile{padding:16px 14px;display:flex;flex-direction:column;gap:4px;border-right:1.5px solid var(--border-default);}
-.km-stat-tile:last-child{border-right:none;}
-@media(min-width:640px){
-  .km-stats-grid{grid-template-columns:1fr;grid-template-rows:1fr 1fr;}
-  .km-stat-tile{border-right:none;border-bottom:1.5px solid var(--border-default);}
-  .km-stat-tile:last-child{border-bottom:none;}
-}
-@media(min-width:1024px){
-  .km-stats-grid{grid-template-columns:1fr 1fr;grid-template-rows:auto;}
-  .km-stat-tile{border-right:1.5px solid var(--border-default);border-bottom:none;}
-  .km-stat-tile:last-child{border-right:none;}
-}
-.km-stat-num{font-family:var(--font-display);font-weight:900;font-size:clamp(28px,6vw,40px);letter-spacing:-0.04em;line-height:1;margin:4px 0 2px;}
-
-/* PULL QUOTE */
-.km-pullquote{margin:18px 0;padding-left:14px;border-left:2px solid var(--coca-red);}
-@media(min-width:640px){.km-pullquote{padding-left:20px;}}
-.km-pullquote p{font-size:clamp(18px,4vw,26px);line-height:1.2;margin:0 0 6px;font-weight:400;color:var(--text-primary);}
-.km-pullquote-data{font-style:normal;font-weight:700;color:var(--coca-red);letter-spacing:0.02em;}
-.km-pullquote cite{font-style:normal;color:var(--text-muted);}
-
-/* ROWS (DAY / MONTH) */
-.km-rows,.km-month-rows{list-style:none;padding:0;margin:0;}
-.km-row{padding:12px 0 10px;border-bottom:1px solid var(--border-default);}
-.km-row:first-child{padding-top:0;}.km-row:last-child{border-bottom:2px solid var(--border-strong);padding-bottom:12px;}
-.km-row-main{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:7px;}
-.km-row-date{font-size:12px;font-weight:700;letter-spacing:0.1em;}
-.km-row-right{text-align:right;}
-.km-row-km{font-size:13px;font-weight:700;letter-spacing:0.02em;}
-.km-row-money{font-family:var(--font-display);font-style:italic;font-weight:800;font-size:13px;color:var(--coca-red);margin-top:2px;}
-.km-bar{height:4px;background:var(--bg-elevated);position:relative;overflow:hidden;}
-.km-bar-fill{height:100%;background:var(--coca-red);transition:width 0.6s var(--ease-out-expo);}
-.km-month-row{display:flex;align-items:center;justify-content:space-between;padding:12px 0;border-bottom:1px solid var(--border-default);}
-.km-month-row:first-child{padding-top:4px;}.km-month-row:last-child{border-bottom:2px solid var(--border-strong);}
-.km-month-title{font-family:var(--font-display);font-weight:800;font-size:18px;letter-spacing:-0.02em;}
-.km-month-money{font-family:var(--font-display);font-style:italic;font-weight:800;font-size:18px;color:var(--coca-red);letter-spacing:-0.01em;white-space:nowrap;}
-@media(min-width:640px){.km-month-title{font-size:22px;}.km-month-money{font-size:22px;}}
-.km-empty{font-size:12.5px;color:var(--text-muted);font-style:italic;text-align:center;padding:18px 0;margin:0;font-family:var(--font-serif);}
-.km-pill-dark{background:var(--text-primary);color:var(--bg-base);padding:3px 8px;font-weight:600;}
-
-/* ─── MARQUEE ─── */
+.km-minimap-label{position:absolute;top:6px;left:8px;right:8px;display:flex;justify-content:space-between;font-family:var(--font-mono);font-size:9px;color:var(--text-muted);text-transform:uppercase;}
 .km-marquee{margin-top:28px;border-top:2px solid var(--border-strong);border-bottom:2px solid var(--border-strong);background:var(--bg-dark);color:#FFF;overflow:hidden;padding:8px 0;}
-.km-marquee-track{display:flex;white-space:nowrap;animation:marquee 32s linear infinite;font-family:var(--font-mono);font-size:10.5px;letter-spacing:0.18em;text-transform:uppercase;font-weight:500;}
-.km-marquee-track span{flex-shrink:0;color:rgba(255,255,255,0.85);}
-@media(min-width:1024px){.km-marquee-track{font-size:11.5px;animation-duration:40s;}}
-@media(prefers-reduced-motion:reduce){.km-marquee-track{animation:none;}}
-
-/* ─── FOOTER ─── */
+.km-marquee-track{display:flex;white-space:nowrap;animation:marquee 32s linear infinite;font-family:var(--font-mono);font-size:10.5px;text-transform:uppercase;}
+@keyframes marquee{0%{transform:translateX(0);}100%{transform:translateX(-50%);}}
 .km-footer{text-align:center;margin-top:22px;}
-.km-footer p{margin:0;font-size:9.5px;line-height:1.7;letter-spacing:0.14em;text-transform:uppercase;font-family:var(--font-mono);color:var(--text-muted);font-weight:500;}
-@media(min-width:640px){.km-footer p{font-size:10px;}}
-
-/* ─── VIEW TRANSITIONS ─── */
-@view-transition{navigation:auto;}
-::view-transition-old(root),::view-transition-new(root){animation-duration:0.4s;animation-timing-function:cubic-bezier(0.32,0.72,0,1);}
+.km-footer p{font-size:9.5px;font-family:var(--font-mono);color:var(--text-muted);text-transform:uppercase;}
+.km-coca{color:var(--coca-red);font-weight:700;}
+.km-spin{animation:spin 1s linear infinite;}
+@keyframes spin{from{transform:rotate(0deg);}to{transform:rotate(360deg);}}
+.km-fade-in{animation:fadeIn 0.3s ease-out;}
+@keyframes fadeIn{from{opacity:0;}to{opacity:1;}}
+.km-fade-up{animation:fadeUp 0.35s var(--ease-ios) both;}
+@keyframes fadeUp{from{opacity:0;transform:translateY(10px);}to{opacity:1;transform:translateY(0);}}
+.km-alert{display:flex;align-items:center;gap:10px;padding:12px 14px;border:1.5px solid var(--border-strong);border-radius:var(--radius-md);margin-bottom:12px;font-size:13px;font-weight:500;}
+.km-alert--err{border-color:var(--coca-red);background:rgba(230,26,39,0.04);color:var(--coca-red);}
+.km-alert--ok{border-color:var(--status-green);background:rgba(22,163,74,0.04);color:var(--status-green);}
+.km-odometer{background:var(--bg-dark);border:1.5px solid var(--border-strong);border-radius:var(--radius-lg);padding:16px 18px;margin:16px 0;display:flex;align-items:center;justify-content:space-between;position:relative;overflow:hidden;}
+.km-odometer-num{display:flex;align-items:baseline;gap:6px;font-family:var(--font-mono);font-weight:700;font-size:36px;color:#FFF;}
+.km-odometer-unit{font-size:14px;color:var(--coca-red);font-weight:800;}
+.km-odometer-money{font-family:var(--font-mono);font-size:11px;color:var(--coca-red);font-weight:600;}
+.km-splash{position:fixed;inset:0;background:var(--bg-dark);z-index:9999;display:flex;align-items:center;justify-content:center;transition:opacity 0.6s var(--ease-ios);}
+.km-splash--exit{opacity:0;pointer-events:none;}
+.km-splash-logo{font-family:var(--font-display);font-weight:900;font-size:48px;color:#FFF;letter-spacing:-0.05em;}
+.km-splash-logo span:last-child{color:var(--coca-red);}
 `;
