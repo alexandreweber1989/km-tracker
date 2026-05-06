@@ -249,7 +249,46 @@ export default function KmTracker(){
 
   useEffect(()=>{if(origin.lat==null||destination.lat==null){setDistance(null);setDistanceLabel('');setRouteGeometry(null);return;}let cancelled=false;(async()=>{setLoading(s=>({...s,distance:true}));try{const r=await fetch(`https://router.project-osrm.org/route/v1/driving/${origin.lng},${origin.lat};${destination.lng},${destination.lat}?overview=simplified&geometries=geojson`);const data=await r.json();if(cancelled)return;if(data.routes?.length>0){const route=data.routes[0];setDistance(route.distance/1000);setDistanceLabel('rota de carro');setRouteGeometry(route.geometry?.coordinates||null);}else throw new Error();}catch{if(cancelled)return;setDistance(haversineKm(origin.lat,origin.lng,destination.lat,destination.lng));setDistanceLabel('linha reta · rota indisponível');setRouteGeometry([[origin.lng,origin.lat],[destination.lng,destination.lat]]);}finally{if(!cancelled)setLoading(s=>({...s,distance:false}));}})();return()=>{cancelled=true;};},[origin.lat,origin.lng,destination.lat,destination.lng]);
 
-  async function searchAddress(query,which){if(query.length<3){if(which==='origin'){setOriginSuggestions([]);setShowOriginDrop(false);}else{setDestSuggestions([]);setShowDestDrop(false);}return;}const typedNum=query.match(/[\s,]+(\d{1,5})(?:\s*[-,]|\s*$)/);const num=typedNum?typedNum[1]:null;try{const url=`https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(query)}&format=json&addressdetails=1&accept-language=pt-BR&countrycodes=br&limit=5`;const r=await fetch(url);if(!r.ok)return;const list=await r.json();const results=list.map(item=>{const a=item.address||{};const street=a.road||a.pedestrian||a.path||'';const houseNum=a.house_number||num||'';const neighborhood=a.suburb||a.neighbourhood||a.quarter||a.city_district||'';const city=a.city||a.town||a.village||a.municipality||'';const stateAbbr=STATE_MAP[a.state||'']||a.state||'';let label=street;if(houseNum)label+=`, ${houseNum}`;if(neighborhood)label+=` - ${neighborhood}`;if(city)label+=`, ${city}`;if(stateAbbr)label+=` - ${stateAbbr}`;return{label:label||item.display_name,lat:parseFloat(item.lat),lng:parseFloat(item.lon)};});if(which==='origin'){setOriginSuggestions(results);setShowOriginDrop(results.length>0);}else{setDestSuggestions(results);setShowDestDrop(results.length>0);}}catch{}}
+  async function searchAddress(query,which){
+    if(query.length<3){
+      if(which==='origin'){setOriginSuggestions([]);setShowOriginDrop(false);}
+      else{setDestSuggestions([]);setShowDestDrop(false);}
+      return;
+    }
+    const typedNum=query.match(/[\s,]+(\d{1,5})(?:\s*[-,]|\s*$)/);
+    const num=typedNum?typedNum[1]:null;
+    try{
+      // Melhoramos a busca para incluir nomes de negócios e POIs
+      const url=`https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(query)}&format=json&addressdetails=1&accept-language=pt-BR&countrycodes=br&limit=8&viewbox=-49.4,-25.6,-49.1,-25.3&bounded=0`;
+      const r=await fetch(url);
+      if(!r.ok)return;
+      const list=await r.json();
+      const results=list.map(item=>{
+        const a=item.address||{};
+        // Se for um negócio (POI), o Nominatim retorna o nome no campo 'name' ou 'display_name'
+        const name=item.name || (item.type !== 'house' && item.type !== 'street' ? item.display_name.split(',')[0] : '');
+        const street=a.road||a.pedestrian||a.path||'';
+        const houseNum=a.house_number||num||'';
+        const neighborhood=a.suburb||a.neighbourhood||a.quarter||a.city_district||'';
+        const city=a.city||a.town||a.village||a.municipality||'';
+        const stateAbbr=STATE_MAP[a.state||'']||a.state||'';
+        
+        let label = '';
+        if (name && name !== street) label = `${name.toUpperCase()} · `;
+        
+        let addrPart = street;
+        if(houseNum) addrPart += `, ${houseNum}`;
+        if(neighborhood) addrPart += ` - ${neighborhood}`;
+        if(city) addrPart += `, ${city}`;
+        if(stateAbbr) addrPart += ` - ${stateAbbr}`;
+        
+        label += addrPart || item.display_name;
+        
+        return{label,lat:parseFloat(item.lat),lng:parseFloat(item.lon)};
+      });
+      if(which==='origin'){setOriginSuggestions(results);setShowOriginDrop(results.length>0);}
+      else{setDestSuggestions(results);setShowDestDrop(results.length>0);}
+    }catch{}}
   function handleAddressInput(e,which){const val=e.target.value;const setter=which==='origin'?setOrigin:setDestination;setter(prev=>({...prev,address:val,lat:null,lng:null}));const debRef=which==='origin'?originDebounce:destDebounce;clearTimeout(debRef.current);debRef.current=setTimeout(()=>searchAddress(val,which),400);}
   function selectSuggestion(item,which){const setter=which==='origin'?setOrigin:setDestination;setter({address:item.label,lat:item.lat,lng:item.lng});if(which==='origin'){setOriginSuggestions([]);setShowOriginDrop(false);}else{setDestSuggestions([]);setShowDestDrop(false);}feedback('tap');}
   async function capture(which){setError(null);setLoading(s=>({...s,[which]:true}));setTopLoading(true);feedback('tap');try{if(!navigator.geolocation)throw new Error('Geolocalização não disponível');const pos=await new Promise((res,rej)=>navigator.geolocation.getCurrentPosition(p=>res({lat:p.coords.latitude,lng:p.coords.longitude}),e=>rej(new Error(e.code===1?'Permissão negada. Habilite o GPS.':e.code===2?'GPS indisponível.':e.code===3?'Timeout. Tente novamente.':'Erro de localização')),{enableHighAccuracy:true,timeout:20000,maximumAge:0}));const result=await getAddressWithNumber(pos.lat,pos.lng);const address=formatAddr(result.data,result.number,result.isApprox);(which==='origin'?setOrigin:setDestination)({address,lat:pos.lat,lng:pos.lng});feedback('success');if(result.number&&result.isApprox){setSuccess('Número aproximado · pode ajustar');setTimeout(()=>setSuccess(null),2600);}else if(!result.number){setSuccess('Sem número · adicione manual');setTimeout(()=>setSuccess(null),2600);}}catch(e){setError(e.message);feedback('error');}finally{setLoading(s=>({...s,[which]:false}));setTopLoading(false);}}
