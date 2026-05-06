@@ -1,4 +1,6 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import { jsPDF } from 'jspdf';
+import { warpPerspective } from './WarpHelper.js';
 import { MapPin, Flag, Save, Download, Trash2, Loader2, AlertCircle, X, Navigation, ChevronDown, ChevronUp, ArrowDown, DollarSign, Calendar, TrendingUp, History, Sun, Moon, Volume2, VolumeX, Vibrate, Camera, Settings, Receipt, ParkingCircle, Eye, Check, Image as ImageIcon } from 'lucide-react';
 import * as XLSX from 'xlsx';
 
@@ -211,10 +213,12 @@ Extraia os seguintes dados em formato JSON puro (sem markdown, sem \`\`\`json):
   "placa": "placa do veículo se visível ou null",
   "classe": "classe do veículo se visível ou null",
   "valor": 0.00,
-  "recibo": "número do recibo/DFE se visível ou null"
+  "recibo": "número do recibo/DFE se visível ou null",
+  "cantos": [{"x": 0,"y": 0}, {"x": 1000,"y": 0}, {"x": 1000,"y": 1000}, {"x": 0,"y": 1000}]
 }
+A matriz "cantos" deve conter as 4 coordenadas exatas (Top-Left, Top-Right, Bottom-Right, Bottom-Left) dos 4 cantos físicos reais do documento/recibo na imagem, para que eu possa fazer um recorte e alinhamento (Perspective Warp). Os valores x e y devem ser uma estimativa visual da posição, convertida para a escala normalizada de 0 a 1000. Se a foto já estiver perfeitamente recortada (apenas o papel) ou se for impossível achar os cantos, retorne null.
 Se algum campo não estiver visível no documento, retorne null para esse campo.
-Retorne SOMENTE o JSON, sem explicações, sem formatação markdown.`;
+Retorne SOMENTE o JSON puro, sem explicações, sem formatação markdown.`;
 
   const body = {
     contents: [{
@@ -924,9 +928,34 @@ export default function KmTracker() {
     feedback('tap');
     try {
       const base64 = await fileToBase64(file);
-      const imageUrl = URL.createObjectURL(file);
       const data = await analyzeReceiptWithGemini(base64, apiKey);
-      setPendingReceipt({ data, imageUrl, base64, blob: file });
+      
+      let finalBlob = file;
+      let finalImageUrl = URL.createObjectURL(file);
+      let finalBase64 = base64;
+
+      if (data.cantos && data.cantos.length === 4) {
+         try {
+           const img = new Image();
+           img.src = finalImageUrl;
+           await new Promise(r => img.onload = r);
+           
+           const srcCorners = data.cantos.map(c => ({
+             x: (c.x / 1000) * (img.naturalWidth || img.width),
+             y: (c.y / 1000) * (img.naturalHeight || img.height)
+           }));
+           
+           const warped = await warpPerspective(img, srcCorners);
+           finalBlob = warped.blob;
+           finalBase64 = warped.dataUrl.split(',')[1];
+           URL.revokeObjectURL(finalImageUrl);
+           finalImageUrl = URL.createObjectURL(finalBlob);
+         } catch(e) {
+           console.error("Warp falhou", e);
+         }
+      }
+
+      setPendingReceipt({ data, imageUrl: finalImageUrl, base64: finalBase64, blob: finalBlob });
       feedback('success');
     } catch (err) {
       setError(err.message || 'Erro ao analisar comprovante');
@@ -981,6 +1010,49 @@ export default function KmTracker() {
       feedback('success');
     } catch {
       setError('Erro ao baixar comprovante');
+    }
+  }
+
+  async function downloadReceiptPdf(id) {
+    try {
+      const blob = await getReceiptImage(id);
+      if (!blob) { setError('Imagem não encontrada'); return; }
+      const meta = receipts.find(r => r.id === id) || {};
+      
+      const dataUrl = await new Promise((resolve) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result);
+        reader.readAsDataURL(blob);
+      });
+      
+      const pdf = new jsPDF();
+      const img = new Image();
+      img.src = dataUrl;
+      await new Promise(res => img.onload = res);
+      
+      const pageWidth = pdf.internal.pageSize.getWidth();
+      const pageHeight = pdf.internal.pageSize.getHeight();
+      const imgRatio = img.width / img.height;
+      
+      let renderWidth = pageWidth - 20;
+      let renderHeight = renderWidth / imgRatio;
+      
+      if (renderHeight > pageHeight - 60) {
+         renderHeight = pageHeight - 60;
+         renderWidth = renderHeight * imgRatio;
+      }
+      
+      pdf.setFontSize(16);
+      pdf.text(`Comprovante: ${meta.concessionaria || meta.tipo || 'Recibo'}`, 10, 20);
+      pdf.setFontSize(11);
+      pdf.text(`Data: ${meta.dataHora || 'N/A'} - Valor: R$ ${Number(meta.valor||0).toFixed(2)}`, 10, 28);
+      
+      pdf.addImage(dataUrl, 'JPEG', 10, 40, renderWidth, renderHeight);
+      pdf.save(`comprovante_${id}.pdf`);
+      feedback('success');
+    } catch (e) {
+      setError('Erro ao gerar PDF');
+      console.error(e);
     }
   }
 
@@ -1530,6 +1602,13 @@ export default function KmTracker() {
             </header>
             <div className="km-receipt-preview-full">
               <img src={receiptPreviewUrl} alt="Comprovante" />
+              <button 
+                className="km-btn km-btn-primary" 
+                style={{marginTop: 16, width: '100%'}}
+                onClick={() => { downloadReceiptPdf(receiptPreviewId); closeReceiptPreview(); }}
+              >
+                <Download size={18}/> BAIXAR COMO PDF
+              </button>
             </div>
           </div>
         </div>
