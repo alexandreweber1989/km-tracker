@@ -228,7 +228,7 @@ Extraia os seguintes dados em formato JSON puro (sem markdown, sem \`\`\`json):
   "classe": "classe do veículo se visível ou null",
   "valor": 0.00,
   "recibo": "número do recibo se visível ou null",
-  "dfe": "número do DFE (Documento Fiscal Equivalente) exatamente como impresso, mantendo todos os zeros à esquerda, ou null"
+  "dfe": "string do DFE (Documento Fiscal Equivalente) exatamente como impresso, garantindo o formato de texto para manter os zeros à esquerda, ou null"
 }
 Se algum campo não estiver visível no documento, retorne null para esse campo.
 Retorne SOMENTE o JSON puro, sem explicações, sem formatação markdown.`;
@@ -1708,7 +1708,7 @@ export default function KmTracker() {
                           {r.placa && <div className="km-receipt-row"><span className="km-mono km-mono-tiny km-muted">PLACA</span> <span>{r.placa}</span></div>}
                           {r.via && <div className="km-receipt-row"><span className="km-mono km-mono-tiny km-muted">VIA</span> <span>{r.via}</span></div>}
                           {r.recibo && <div className="km-receipt-row"><span className="km-mono km-mono-tiny km-muted">RECIBO</span> <span className="km-mono km-mono-tiny">{r.recibo}</span></div>}
-                          {r.dfe && <div className="km-receipt-row"><span className="km-mono km-mono-tiny km-muted">DFE</span> <span className="km-mono km-mono-tiny" style={{ color: 'var(--coca-red)' }}>{r.dfe}</span></div>}
+                          {r.dfe != null && <div className="km-receipt-row" style={{ backgroundColor: 'var(--bg-elevated)', padding: '6px 8px', borderRadius: '6px', marginTop: '4px' }}><span className="km-mono km-mono-tiny km-muted">DFE</span> <span className="km-mono km-mono-tiny" style={{ color: 'var(--coca-red)', fontWeight: 'bold', fontSize: '12px' }}>{String(r.dfe)}</span></div>}
                         </div>
                       </li>
                     ))}
@@ -2540,14 +2540,20 @@ body {
 .km-trip {
   background: var(--bg-base);
   border: 1px solid var(--border-default);
-  padding: 16px;
+  border-left: 4px solid var(--coca-red);
+  padding: 18px 16px;
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 14px;
   position: relative;
   border-radius: 12px;
-  box-shadow: 0 4px 14px rgba(0,0,0,0.03);
-  margin-bottom: 14px;
+  box-shadow: 0 6px 20px rgba(0,0,0,0.06);
+  margin-bottom: 18px;
+  transition: transform 0.2s, box-shadow 0.2s;
+}
+.km-trip:active {
+  transform: translateY(1px);
+  box-shadow: 0 2px 10px rgba(0,0,0,0.04);
 }
 .km-trip:first-child { margin-top: 4px; }
 .km-trip:last-child { margin-bottom: 14px; }
