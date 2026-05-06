@@ -174,12 +174,11 @@ async function getBestGeminiModel(apiKey) {
     if (!data.models) return 'models/gemini-1.5-flash';
 
     const availableNames = data.models.map(m => m.name);
+    // Removemos os modelos 2.0 pois a API lista eles, mas bloqueia o uso para contas novas/gratuitas
     const preferences = [
-      "models/gemini-2.0-flash",
-      "models/gemini-2.0-flash-exp",
       "models/gemini-1.5-flash",
       "models/gemini-1.5-pro",
-      "models/gemini-pro-vision"
+      "models/gemini-1.5-flash-8b"
     ];
 
     for (const pref of preferences) {
