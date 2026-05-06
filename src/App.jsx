@@ -165,8 +165,41 @@ async function deleteReceiptImage(id) {
 // ═══════════════════════════════════════════════════════════════════════════
 // GEMINI VISION API
 // ═══════════════════════════════════════════════════════════════════════════
+async function getBestGeminiModel(apiKey) {
+  try {
+    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`);
+    if (!response.ok) return 'models/gemini-1.5-flash';
+    
+    const data = await response.json();
+    if (!data.models) return 'models/gemini-1.5-flash';
+
+    const availableNames = data.models.map(m => m.name);
+    const preferences = [
+      "models/gemini-2.0-flash",
+      "models/gemini-2.0-flash-exp",
+      "models/gemini-1.5-flash",
+      "models/gemini-1.5-pro",
+      "models/gemini-pro-vision"
+    ];
+
+    for (const pref of preferences) {
+      if (availableNames.includes(pref)) return pref;
+    }
+    
+    const fallback = data.models.find(m => m.name.includes("gemini") && 
+      (m.supportedGenerationMethods?.includes("generateContent") || m.supportedMethods?.includes("generateContent"))
+    );
+    if (fallback) return fallback.name;
+    
+    return 'models/gemini-1.5-flash';
+  } catch (e) {
+    return 'models/gemini-1.5-flash';
+  }
+}
+
 async function analyzeReceiptWithGemini(imageBase64, apiKey) {
-  const url = `https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
+  const modelName = await getBestGeminiModel(apiKey);
+  const url = `https://generativelanguage.googleapis.com/v1beta/${modelName}:generateContent?key=${apiKey}`;
   const prompt = `Analise esta foto de um comprovante de pedágio ou estacionamento brasileiro.
 Extraia os seguintes dados em formato JSON puro (sem markdown, sem \`\`\`json):
 {
