@@ -672,10 +672,10 @@ function Dashboard({ trips, receipts = [] }) {
         </div>
         <div className="km-hero-meta">
           <span className="km-mono">{numFmt.format(stats.totalKm)} KM (R$ {brlFmt.format(stats.totalKm * RATE)})</span>
-          {totalDespesas > 0 && (
+          {stats.totalDespesas > 0 && (
             <>
               <span className="km-divider-vert" />
-              <span className="km-mono" style={{ color: 'var(--coca-red)' }}>+ DESP: R$ {brlFmt.format(totalDespesas)}</span>
+              <span className="km-mono" style={{ color: 'var(--coca-red)' }}>+ DESP: R$ {brlFmt.format(stats.totalDespesas)}</span>
             </>
           )}
         </div>
@@ -765,7 +765,7 @@ function Dashboard({ trips, receipts = [] }) {
                     </div>
                     <div className="km-row-right">
                       <div className="km-mono km-row-km">{numFmt.format(d.km)} KM</div>
-                      <div className="km-row-money">{brlFmt.format(earning)}</div>
+                      <div className="km-row-money">{brlFmt.format(earning + d.toll + d.parking)}</div>
                     </div>
                   </div>
                   <div className="km-bar"><div className="km-bar-fill" style={{ width: `${pct}%` }} /></div>
@@ -797,7 +797,7 @@ function Dashboard({ trips, receipts = [] }) {
                     <div className="km-month-title">{MONTH_NAMES[parseInt(mm)-1]} <span className="km-mono km-muted">·{yy}</span></div>
                     <div className="km-mono km-mono-tiny km-muted">{m.count} VIAGENS · {numFmt.format(m.km)} KM · {m.daysCount} DIAS</div>
                   </div>
-                  <div className="km-month-money">{brlFmt.format(m.km * RATE)}</div>
+                  <div className="km-month-money">{brlFmt.format((m.km * RATE) + m.toll + m.parking)}</div>
                 </li>
               );
             })}
