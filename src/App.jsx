@@ -576,11 +576,18 @@ function BigCurrency({ value, size = 'xl' }) {
 // AUTOCOMPLETE LIST
 // ═══════════════════════════════════════════════════════════════════════════
 function SuggestionsList({ suggestions, onSelect, loading }) {
-  if (loading && suggestions.length === 0) return null;
   if (!loading && suggestions.length === 0) return null;
 
   return (
     <div className="km-suggestions">
+      {loading && suggestions.length === 0 && (
+        <div className="km-suggestion-item" style={{ opacity: 0.6 }}>
+          <Loader2 size={14} className="km-spin" />
+          <div className="km-suggestion-content">
+            <div className="km-suggestion-addr">Buscando endereços...</div>
+          </div>
+        </div>
+      )}
       {suggestions.map((s, i) => (
         <div key={i} className="km-suggestion-item km-press" onClick={() => onSelect(s)}>
           <div className="km-suggestion-icon">
@@ -3342,26 +3349,36 @@ body {
   font-size: 12px;
 }
 
+.km-field {
+  margin-bottom: 22px;
+  position: relative;
+}
+.km-field-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
 /* ─── SUGGESTIONS DROPDOWN ─────────────────────────── */
 .km-suggestions {
   position: absolute;
-  top: 100%;
+  top: calc(100% + 4px);
   left: 0;
   right: 0;
-  z-index: 1000;
-  background: var(--bg-elevated);
-  border: 1.5px solid var(--border-subtle);
-  border-top: none;
-  box-shadow: 0 10px 30px rgba(0,0,0,0.15);
+  z-index: 5000;
+  background: var(--bg-surface);
+  border: 2px solid var(--border-strong);
+  box-shadow: 6px 6px 0 0 var(--border-strong);
   max-height: 240px;
   overflow-y: auto;
-  border-radius: 0 0 12px 12px;
-  animation: fadeUp 0.2s var(--ease-ios) both;
+  border-radius: 0;
+  animation: fadeUp 0.15s var(--ease-ios) both;
 }
 .km-suggestion-item {
   padding: 12px 16px;
   cursor: pointer;
-  border-bottom: 1px solid var(--border-subtle);
+  border-bottom: 1.5px solid var(--border-default);
   transition: all 0.2s ease;
   display: flex;
   align-items: flex-start;
@@ -3371,13 +3388,13 @@ body {
   border-bottom: none;
 }
 .km-suggestion-item:hover {
-  background: var(--bg-base);
+  background: var(--bg-elevated);
   padding-left: 20px;
 }
 .km-suggestion-icon {
   margin-top: 2px;
   color: var(--coca-red);
-  opacity: 0.7;
+  opacity: 0.8;
 }
 .km-suggestion-content {
   display: flex;
@@ -3386,7 +3403,7 @@ body {
 }
 .km-suggestion-addr {
   font-size: 13px;
-  font-weight: 500;
+  font-weight: 600;
   color: var(--text-primary);
   line-height: 1.3;
 }
@@ -3394,6 +3411,7 @@ body {
   font-size: 10px;
   color: var(--text-muted);
   font-family: 'Geist Mono', monospace;
-  letter-spacing: -0.02em;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
 }
 `;
