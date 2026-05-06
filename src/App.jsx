@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { jsPDF } from 'jspdf';
 import { autoCropDocument } from './WarpHelper.js';
-import { MapPin, Flag, Save, Download, Trash2, Loader2, AlertCircle, X, Navigation, ChevronDown, ChevronUp, ArrowDown, DollarSign, Calendar, TrendingUp, History, Sun, Moon, Volume2, VolumeX, Vibrate, Camera, Settings, Receipt, ParkingCircle, Eye, Check, Image as ImageIcon } from 'lucide-react';
+import { MapPin, Flag, Save, Download, Trash2, Loader2, AlertCircle, X, Navigation, ChevronDown, ChevronUp, ArrowDown, DollarSign, Calendar, TrendingUp, History, Sun, Moon, Volume2, VolumeX, Vibrate, Camera, Settings, Receipt, ParkingCircle, Eye, Check, Image as ImageIcon, FileText, Aperture } from 'lucide-react';
 import * as XLSX from 'xlsx';
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -449,7 +449,9 @@ function ActivityRings({ kmProgress, moneyProgress, daysProgress }) {
 // ═══════════════════════════════════════════════════════════════════════════
 // SPARKLINE
 // ═══════════════════════════════════════════════════════════════════════════
-function Sparkline({ values, height = 36 }) {
+function Sparkline({ values, height = 36, labels }) {
+  const [touchIdx, setTouchIdx] = useState(null);
+  const svgRef = useRef(null);
   if (!values || values.length === 0) return null;
   const W = 280, H = height;
   const max = Math.max(...values, 0.01);
@@ -457,17 +459,43 @@ function Sparkline({ values, height = 36 }) {
   const points = values.map((v, i) => [i * step, H - (v / max) * (H - 4) - 2]);
   const pathD = points.map(([x, y], i) => `${i === 0 ? 'M' : 'L'}${x.toFixed(1)},${y.toFixed(1)}`).join(' ');
   const areaD = pathD + ` L${W},${H} L0,${H} Z`;
+
+  function handleTouch(e) {
+    if (!svgRef.current) return;
+    const rect = svgRef.current.getBoundingClientRect();
+    const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+    const relX = (clientX - rect.left) / rect.width;
+    const idx = Math.round(relX * (values.length - 1));
+    if (idx >= 0 && idx < values.length) setTouchIdx(idx);
+  }
+
   return (
-    <svg viewBox={`0 0 ${W} ${H}`} className="km-sparkline" preserveAspectRatio="none">
-      <defs>
-        <linearGradient id="sparkfill" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" stopColor="var(--coca-red)" stopOpacity="0.3" />
-          <stop offset="100%" stopColor="var(--coca-red)" stopOpacity="0" />
-        </linearGradient>
-      </defs>
-      <path d={areaD} fill="url(#sparkfill)" />
-      <path d={pathD} fill="none" stroke="var(--coca-red)" strokeWidth="1.5" strokeLinejoin="round" strokeLinecap="round" />
-    </svg>
+    <div className="km-sparkline-wrap" style={{ position: 'relative' }}>
+      <svg ref={svgRef} viewBox={`0 0 ${W} ${H}`} className="km-sparkline" preserveAspectRatio="none"
+        onTouchStart={handleTouch} onTouchMove={handleTouch} onTouchEnd={() => setTouchIdx(null)}
+        onMouseMove={handleTouch} onMouseLeave={() => setTouchIdx(null)}
+      >
+        <defs>
+          <linearGradient id="sparkfill" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor="var(--coca-red)" stopOpacity="0.3" />
+            <stop offset="100%" stopColor="var(--coca-red)" stopOpacity="0" />
+          </linearGradient>
+        </defs>
+        <path d={areaD} fill="url(#sparkfill)" />
+        <path d={pathD} fill="none" stroke="var(--coca-red)" strokeWidth="1.5" strokeLinejoin="round" strokeLinecap="round" />
+        {touchIdx != null && points[touchIdx] && (
+          <>
+            <line x1={points[touchIdx][0]} y1={0} x2={points[touchIdx][0]} y2={H} stroke="var(--coca-red)" strokeWidth="1" strokeDasharray="3,3" opacity="0.6" />
+            <circle cx={points[touchIdx][0]} cy={points[touchIdx][1]} r="4" fill="var(--coca-red)" stroke="var(--bg-base)" strokeWidth="2" />
+          </>
+        )}
+      </svg>
+      {touchIdx != null && values[touchIdx] != null && (
+        <div className="km-sparkline-tooltip" style={{ left: `${(touchIdx / (values.length - 1)) * 100}%` }}>
+          <span className="km-mono km-mono-tiny">{numFmt.format(values[touchIdx])} KM</span>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -1080,19 +1108,193 @@ export default function KmTracker() {
   }
 
   function exportToExcel() {
-    if (!trips.length) { setError('Nenhuma viagem para exportar'); feedback('error'); return; }
-    const sorted = [...trips].sort((a, b) => {
+    if (!trips.length && !receipts.length) { setError('Nenhum dado para exportar'); feedback('error'); return; }
+    const wb = XLSX.utils.book_new();
+
+    // ABA 1: Viagens
+    const sortedTrips = [...trips].sort((a, b) => {
       const parse = s => { const [d,m,y] = s.split('/'); return new Date(y,m-1,d); };
       return parse(a.date) - parse(b.date);
     });
-    const data = [['Data','Origem','Destino'], ...sorted.map(t => [t.date, t.origin, t.destination])];
-    const ws = XLSX.utils.aoa_to_sheet(data);
-    ws['!cols'] = [{ wch:12 },{ wch:60 },{ wch:60 }];
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, 'kmadicional');
-    XLSX.writeFile(wb, 'lançamento_de_Km.xlsx');
-    setSuccess('Planilha exportada'); setTimeout(() => setSuccess(null), 2200);
+    const tripsData = [['Data','Origem','Destino','KM','Valor (R$)'], ...sortedTrips.map(t => [t.date, t.origin, t.destination, t.km || '', t.km ? (t.km * RATE).toFixed(2) : ''])];
+    const wsTrips = XLSX.utils.aoa_to_sheet(tripsData);
+    wsTrips['!cols'] = [{ wch:12 },{ wch:55 },{ wch:55 },{ wch:10 },{ wch:12 }];
+    XLSX.utils.book_append_sheet(wb, wsTrips, 'kmadicional');
+
+    // ABA 2: Pedágios
+    const pedData = [['Data/Hora','Concessionária','Praça','Via','Placa','Valor (R$)','Recibo'], ...pedagios.map(r => [r.dataHora||'', r.concessionaria||'', r.praca||'', r.via||'', r.placa||'', r.valor||0, r.recibo||''])];
+    const wsPed = XLSX.utils.aoa_to_sheet(pedData);
+    wsPed['!cols'] = [{ wch:20 },{ wch:30 },{ wch:30 },{ wch:25 },{ wch:10 },{ wch:12 },{ wch:20 }];
+    XLSX.utils.book_append_sheet(wb, wsPed, 'Pedágios');
+
+    // ABA 3: Estacionamentos
+    const estData = [['Data/Hora','Estabelecimento','Local','Endereço','Placa','Valor (R$)','Recibo'], ...estacionamentos.map(r => [r.dataHora||'', r.concessionaria||'', r.praca||'', r.via||'', r.placa||'', r.valor||0, r.recibo||''])];
+    const wsEst = XLSX.utils.aoa_to_sheet(estData);
+    wsEst['!cols'] = [{ wch:20 },{ wch:30 },{ wch:30 },{ wch:25 },{ wch:10 },{ wch:12 },{ wch:20 }];
+    XLSX.utils.book_append_sheet(wb, wsEst, 'Estacionamentos');
+
+    XLSX.writeFile(wb, 'relatorio_completo_km.xlsx');
+    setSuccess('Planilha exportada com 3 abas!'); setTimeout(() => setSuccess(null), 2200);
     feedback('success');
+  }
+
+  async function generateFullReport() {
+    setTopLoading(true);
+    feedback('tap');
+    try {
+      const pdf = new jsPDF();
+      const pageW = pdf.internal.pageSize.getWidth();
+      const pageH = pdf.internal.pageSize.getHeight();
+      const now = new Date();
+      const periodo = `${MONTH_FULL[now.getMonth()]} ${now.getFullYear()}`;
+
+      // ── CAPA ──
+      pdf.setFillColor(10, 10, 11);
+      pdf.rect(0, 0, pageW, pageH, 'F');
+      pdf.setTextColor(237, 237, 237);
+      pdf.setFontSize(36);
+      pdf.text('DRIVE LOG', pageW / 2, 80, { align: 'center' });
+      pdf.setFontSize(14);
+      pdf.text('RELATÓRIO DE REEMBOLSO', pageW / 2, 95, { align: 'center' });
+      pdf.setFontSize(11);
+      pdf.setTextColor(161, 161, 170);
+      pdf.text(`Período: ${periodo}`, pageW / 2, 115, { align: 'center' });
+      pdf.text(`Gerado em: ${now.toLocaleDateString('pt-BR')} às ${now.toLocaleTimeString('pt-BR')}`, pageW / 2, 125, { align: 'center' });
+      pdf.setTextColor(230, 26, 39);
+      pdf.setFontSize(28);
+      pdf.text(brlFmt.format(totalEarning + totalDespesas), pageW / 2, 160, { align: 'center' });
+      pdf.setFontSize(10);
+      pdf.setTextColor(161, 161, 170);
+      pdf.text('VALOR TOTAL A REEMBOLSAR (KM + DESPESAS)', pageW / 2, 172, { align: 'center' });
+
+      // ── RESUMO KM ──
+      pdf.addPage();
+      pdf.setTextColor(10, 10, 11);
+      pdf.setFontSize(18);
+      pdf.text('Resumo de Quilometragem', 10, 20);
+      pdf.setFontSize(10);
+      pdf.setTextColor(82, 82, 91);
+      pdf.text(`Total: ${numFmt.format(totalKm)} KM × R$ 1,14 = ${brlFmt.format(totalEarning)}`, 10, 30);
+
+      let y = 42;
+      pdf.setFontSize(8);
+      pdf.setTextColor(120, 120, 120);
+      pdf.text('DATA', 10, y);
+      pdf.text('ORIGEM', 30, y);
+      pdf.text('DESTINO', 110, y);
+      pdf.text('KM', 185, y, { align: 'right' });
+      pdf.text('R$', 200, y, { align: 'right' });
+      y += 6;
+      pdf.setDrawColor(200, 200, 200);
+      pdf.line(10, y - 2, 200, y - 2);
+
+      pdf.setTextColor(10, 10, 11);
+      for (const t of trips) {
+        if (y > pageH - 20) { pdf.addPage(); y = 20; }
+        pdf.setFontSize(7.5);
+        pdf.text(t.date, 10, y);
+        pdf.text((t.origin || '').substring(0, 45), 30, y);
+        pdf.text((t.destination || '').substring(0, 45), 110, y);
+        pdf.text(t.km != null ? numFmt.format(t.km) : '—', 185, y, { align: 'right' });
+        pdf.text(t.km != null ? brlFmt.format(t.km * RATE) : '—', 200, y, { align: 'right' });
+        y += 5;
+      }
+
+      // ── RESUMO DESPESAS ──
+      if (receipts.length > 0) {
+        pdf.addPage();
+        pdf.setFontSize(18);
+        pdf.setTextColor(10, 10, 11);
+        pdf.text('Resumo de Despesas', 10, 20);
+        pdf.setFontSize(10);
+        pdf.setTextColor(82, 82, 91);
+        pdf.text(`Pedágios: ${brlFmt.format(totalPedagios)} | Estacionamentos: ${brlFmt.format(totalEstacionamentos)} | Total: ${brlFmt.format(totalDespesas)}`, 10, 30);
+
+        y = 42;
+        pdf.setFontSize(8);
+        pdf.setTextColor(120, 120, 120);
+        pdf.text('DATA', 10, y);
+        pdf.text('TIPO', 40, y);
+        pdf.text('CONCESSÃO/LOCAL', 65, y);
+        pdf.text('PRAÇA', 130, y);
+        pdf.text('VALOR', 200, y, { align: 'right' });
+        y += 6;
+        pdf.line(10, y - 2, 200, y - 2);
+
+        pdf.setTextColor(10, 10, 11);
+        for (const r of receipts) {
+          if (y > pageH - 20) { pdf.addPage(); y = 20; }
+          pdf.setFontSize(7.5);
+          pdf.text(r.dataHora || '—', 10, y);
+          pdf.text(r.tipo === 'pedagio' ? 'Pedágio' : 'Estacion.', 40, y);
+          pdf.text((r.concessionaria || '—').substring(0, 35), 65, y);
+          pdf.text((r.praca || '—').substring(0, 35), 130, y);
+          pdf.text(brlFmt.format(r.valor || 0), 200, y, { align: 'right' });
+          y += 5;
+        }
+
+        // ── COMPROVANTES (1 por página) ──
+        for (const r of receipts) {
+          try {
+            const blob = await getReceiptImage(r.id);
+            if (!blob) continue;
+            const dataUrl = await new Promise(res => {
+              const reader = new FileReader();
+              reader.onload = () => res(reader.result);
+              reader.readAsDataURL(blob);
+            });
+            pdf.addPage();
+            pdf.setFontSize(14);
+            pdf.setTextColor(10, 10, 11);
+            pdf.text(`Comprovante: ${r.concessionaria || r.tipo || 'Recibo'}`, 10, 18);
+            pdf.setFontSize(9);
+            pdf.setTextColor(82, 82, 91);
+            pdf.text(`Data: ${r.dataHora || 'N/A'} | Valor: ${brlFmt.format(r.valor || 0)} | Via: ${r.via || 'N/A'}`, 10, 26);
+            if (r.recibo) pdf.text(`Recibo: ${r.recibo}`, 10, 32);
+
+            const img = new Image();
+            img.src = dataUrl;
+            await new Promise(res => { img.onload = res; img.onerror = res; });
+            const imgRatio = img.width / img.height;
+            let rw = pageW - 20, rh = rw / imgRatio;
+            if (rh > pageH - 50) { rh = pageH - 50; rw = rh * imgRatio; }
+            pdf.addImage(dataUrl, 'JPEG', 10, 38, rw, rh);
+          } catch { /* skip */ }
+        }
+      }
+
+      // ── TOTALIZAÇÃO FINAL ──
+      pdf.addPage();
+      pdf.setFillColor(10, 10, 11);
+      pdf.rect(0, 0, pageW, pageH, 'F');
+      pdf.setTextColor(237, 237, 237);
+      pdf.setFontSize(14);
+      pdf.text('TOTALIZAÇÃO', pageW / 2, 60, { align: 'center' });
+
+      pdf.setFontSize(11);
+      pdf.setTextColor(161, 161, 170);
+      pdf.text(`Quilometragem: ${numFmt.format(totalKm)} KM`, pageW / 2, 85, { align: 'center' });
+      pdf.text(`Valor KM: ${brlFmt.format(totalEarning)}`, pageW / 2, 95, { align: 'center' });
+      pdf.text(`Pedágios: ${brlFmt.format(totalPedagios)}`, pageW / 2, 105, { align: 'center' });
+      pdf.text(`Estacionamentos: ${brlFmt.format(totalEstacionamentos)}`, pageW / 2, 115, { align: 'center' });
+
+      pdf.setTextColor(230, 26, 39);
+      pdf.setFontSize(32);
+      pdf.text(brlFmt.format(totalEarning + totalDespesas), pageW / 2, 150, { align: 'center' });
+      pdf.setFontSize(10);
+      pdf.setTextColor(161, 161, 170);
+      pdf.text('TOTAL A REEMBOLSAR', pageW / 2, 162, { align: 'center' });
+
+      pdf.save(`relatorio_reembolso_${now.getMonth()+1}_${now.getFullYear()}.pdf`);
+      setSuccess('Relatório PDF gerado!'); setTimeout(() => setSuccess(null), 2200);
+      feedback('success');
+    } catch (e) {
+      console.error(e);
+      setError('Erro ao gerar relatório');
+      feedback('error');
+    } finally {
+      setTopLoading(false);
+    }
   }
 
   function handleToggleTheme() {
@@ -1418,9 +1620,14 @@ export default function KmTracker() {
                   <h2 className="km-h2">Histórico</h2>
                   <span className="km-mono km-mono-tiny km-pill-dark">{String(trips.length).padStart(2,'0')}</span>
                 </div>
-                <button onClick={exportToExcel} className="km-btn km-btn--ink km-btn--small km-press">
-                  <Download size={13} strokeWidth={2.4} /> EXPORTAR
-                </button>
+                <div style={{ display: 'flex', gap: '6px' }}>
+                  <button onClick={exportToExcel} className="km-btn km-btn--ink km-btn--small km-press">
+                    <Download size={13} strokeWidth={2.4} /> EXCEL
+                  </button>
+                  <button onClick={generateFullReport} className="km-btn km-btn--red km-btn--small km-press">
+                    <FileText size={13} strokeWidth={2.4} /> PDF
+                  </button>
+                </div>
               </header>
 
               {trips.length === 0 ? (
@@ -2328,6 +2535,25 @@ body {
 .km-sparkline {
   flex: 1; height: 32px;
   width: 100%;
+  touch-action: none;
+  cursor: crosshair;
+}
+.km-sparkline-wrap {
+  position: relative;
+}
+.km-sparkline-tooltip {
+  position: absolute;
+  top: -28px;
+  transform: translateX(-50%);
+  background: var(--text-primary);
+  color: var(--bg-base);
+  padding: 3px 8px;
+  font-size: 10px;
+  white-space: nowrap;
+  pointer-events: none;
+  animation: fadeIn 0.15s ease both;
+  z-index: 10;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.25);
 }
 
 .km-card--projection {
@@ -2685,5 +2911,79 @@ body {
   font-size: 13px;
   font-weight: 500;
   color: var(--text-primary);
+}
+
+/* ─── GPU ACCELERATION ─────────────────────────────── */
+.km-card {
+  will-change: transform;
+  transform: translateZ(0);
+}
+.km-trip {
+  will-change: transform, opacity;
+  animation: fadeUp 0.35s var(--ease-ios) both;
+}
+.km-trip:nth-child(1) { animation-delay: 0ms; }
+.km-trip:nth-child(2) { animation-delay: 40ms; }
+.km-trip:nth-child(3) { animation-delay: 80ms; }
+.km-trip:nth-child(4) { animation-delay: 120ms; }
+.km-trip:nth-child(5) { animation-delay: 160ms; }
+.km-trip:nth-child(n+6) { animation-delay: 200ms; }
+
+/* ─── RIPPLE EFFECT (Material You) ─────────────────── */
+.km-press {
+  position: relative;
+  overflow: hidden;
+}
+.km-press::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(circle at var(--ripple-x, 50%) var(--ripple-y, 50%), rgba(255,255,255,0.35) 0%, transparent 60%);
+  opacity: 0;
+  transition: opacity 0.4s ease;
+  pointer-events: none;
+}
+.km-press:active::after {
+  opacity: 1;
+  transition: opacity 0s;
+}
+
+/* ─── STAGGERED BARS (Dashboard) ───────────────────── */
+.km-bar-fill {
+  animation: barGrow 0.8s var(--ease-out-expo) both;
+}
+@keyframes barGrow {
+  from { width: 0; }
+}
+.km-row:nth-child(1) .km-bar-fill { animation-delay: 0ms; }
+.km-row:nth-child(2) .km-bar-fill { animation-delay: 60ms; }
+.km-row:nth-child(3) .km-bar-fill { animation-delay: 120ms; }
+.km-row:nth-child(4) .km-bar-fill { animation-delay: 180ms; }
+.km-row:nth-child(5) .km-bar-fill { animation-delay: 240ms; }
+.km-row:nth-child(n+6) .km-bar-fill { animation-delay: 300ms; }
+
+/* ─── HEADER PARALLAX & BLUR ──────────────────────── */
+.km-header {
+  transform: translateZ(0);
+  will-change: transform;
+}
+.km-aurora-bg {
+  will-change: transform;
+  transition: transform 0.1s linear;
+}
+
+/* ─── MONTH ROW STAGGER ───────────────────────────── */
+.km-month-row {
+  animation: fadeUp 0.35s var(--ease-ios) both;
+}
+.km-month-row:nth-child(1) { animation-delay: 0ms; }
+.km-month-row:nth-child(2) { animation-delay: 50ms; }
+.km-month-row:nth-child(3) { animation-delay: 100ms; }
+.km-month-row:nth-child(4) { animation-delay: 150ms; }
+.km-month-row:nth-child(n+5) { animation-delay: 200ms; }
+
+/* ─── ACTIVITY RINGS ENTRANCE ─────────────────────── */
+.km-rings svg circle {
+  will-change: stroke-dashoffset;
 }
 `;
