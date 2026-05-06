@@ -3,7 +3,7 @@ import { MapPin, Flag, Save, Download, Trash2, Loader2, AlertCircle, X, Navigati
 import * as XLSX from 'xlsx';
 
 const RATE = 1.14;
-const APP_VERSION = 'v3·1';
+const APP_VERSION = 'v3·1'; // Manus Sync Active
 
 const SEED_TRIPS = [
   { id:'s1', date:'20/04/2026', origin:'Rua Attilio Ceccarelli, 90 - Jardim Rio Pequeno, São Paulo - SP, 05388-040', destination:'Rua dos Marianos, 349 - Centro, Osasco - SP, 06016-050', km:null, geometry:null },
