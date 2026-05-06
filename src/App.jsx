@@ -265,49 +265,75 @@ Retorne SOMENTE o JSON puro, sem explicações, sem formatação markdown.`;
 }
 
 /**
- * Inteligência 2.0: Resolve nomes de empresas + cidades/bairros
- * Agora retorna uma LISTA de sugestões para o dropdown.
+ * Photon API (OpenStreetMap) — busca endereços em tempo real, GRATUITA, SEM chave API
+ * Retorna array de: { address, lat, lng, type }
+ */
+async function searchAddressesPhoton(query) {
+  if (!query || query.length < 3) return [];
+  try {
+    const encoded = encodeURIComponent(query);
+    const url = `https://photon.komoot.io/api/?q=${encoded}&limit=6&lang=default&lat=-23.5&lon=-49.0`;
+    const response = await fetch(url);
+    if (!response.ok) return [];
+    const data = await response.json();
+    if (!data.features || data.features.length === 0) return [];
+    
+    return data.features.map(f => {
+      const p = f.properties || {};
+      const coords = f.geometry?.coordinates || [];
+      const parts = [];
+      if (p.name && p.name !== p.street) parts.push(p.name);
+      if (p.street) {
+        let streetPart = p.street;
+        if (p.housenumber) streetPart += `, ${p.housenumber}`;
+        parts.push(streetPart);
+      }
+      if (p.district || p.locality) parts.push(p.district || p.locality);
+      if (p.city || p.town || p.village) {
+        let cityPart = p.city || p.town || p.village;
+        if (p.state) {
+          const stateAbbr = STATE_MAP[p.state] || p.state;
+          cityPart += ` - ${stateAbbr}`;
+        }
+        parts.push(cityPart);
+      }
+      if (p.postcode) parts.push(p.postcode);
+      
+      const address = parts.filter(Boolean).join(', ') || p.name || query;
+      return {
+        address,
+        lat: coords[1],
+        lng: coords[0],
+        type: p.osm_value || p.type || 'place'
+      };
+    }).filter(s => s.lat && s.lng);
+  } catch (err) {
+    console.error('Photon search error:', err);
+    return [];
+  }
+}
+
+/**
+ * Gemini fallback — para buscas por nome de empresa/comercial
  */
 async function resolvePlaceWithGemini(query, apiKey) {
-  if (!query || query.length < 3) return [];
-  console.log('Resolving place with Gemini:', query);
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key=${apiKey}`;
+  if (!query || query.length < 3 || !apiKey) return [];
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
   const prompt = `Você é um resolvedor de endereços geográficos especializado no Brasil.
-Seu objetivo é fornecer uma lista de sugestões de endereços reais baseados em buscas por "Nome de Empresa + Localidade" ou endereços incompletos.
-
 ENTRADA: "${query}"
-
-REGRAS:
-1. Retorne até 5 sugestões que façam sentido no contexto geográfico (Cidade, Bairro) mencionado.
-2. Cada sugestão deve incluir o endereço formatado (com número se possível), latitude e longitude.
-3. Se o usuário digitar "FEMSA Ponta Grossa", a lista deve conter as unidades da FEMSA nessa cidade.
-4. Responda APENAS um JSON no formato: [{"address": "Rua..., Num - Bairro, Cidade - UF, CEP", "lat": -23.123, "lng": -46.123}, ...]
-5. Não use markdown, responda apenas o array JSON.`;
-
+Retorne até 5 sugestões reais no formato JSON: [{"address": "Rua..., Num - Bairro, Cidade - UF", "lat": -23.123, "lng": -46.123}]
+Apenas o JSON, sem markdown.`;
   const body = { contents: [{ parts: [{ text: prompt }] }] };
   try {
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body)
-    });
-    if (!response.ok) {
-      const errData = await response.json().catch(() => ({}));
-      console.error('Gemini API Error:', response.status, errData);
-      return [{ address: `ERRO API: ${response.status}`, error: true }];
-    }
+    const response = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    if (!response.ok) return [];
     const data = await response.json();
     const text = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
-    
     const jsonMatch = text.match(/\[[\s\S]*\]/);
     const cleaned = jsonMatch ? jsonMatch[0] : text.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
-    
     const parsed = JSON.parse(cleaned);
     return Array.isArray(parsed) ? parsed : [parsed];
-  } catch (err) {
-    console.error('Gemini Autocomplete Exception:', err);
-    return [{ address: 'ERRO DE CONEXÃO', error: true }];
-  }
+  } catch { return []; }
 }
 
 function fileToBase64(file) {
@@ -584,41 +610,30 @@ function BigCurrency({ value, size = 'xl' }) {
 // ═══════════════════════════════════════════════════════════════════════════
 // AUTOCOMPLETE LIST
 // ═══════════════════════════════════════════════════════════════════════════
-function SuggestionsList({ suggestions, onSelect, loading, hasKey }) {
-  if (!hasKey) {
-    return (
-      <div className="km-suggestions km-suggestions--warn">
-        <div className="km-suggestion-item">
-          <Settings size={14} />
-          <div className="km-suggestion-content">
-            <div className="km-suggestion-addr">Configure a API Key para ver sugestões</div>
-            <div className="km-suggestion-meta">Clique na engrenagem no topo</div>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
+function SuggestionsList({ suggestions, onSelect, loading }) {
   if (!loading && suggestions.length === 0) return null;
 
   return (
     <div className="km-suggestions">
-      {loading && (
+      {loading && suggestions.length === 0 && (
         <div className="km-suggestion-item">
-          <Loader2 size={14} className="km-spin" />
+          <Loader2 size={14} className="km-spin" style={{ color: 'var(--coca-red)', flexShrink: 0 }} />
           <div className="km-suggestion-content">
             <div className="km-suggestion-addr">Buscando endereços...</div>
+            <div className="km-suggestion-meta">PESQUISANDO</div>
           </div>
         </div>
       )}
       {suggestions.map((s, i) => (
-        <div key={i} className="km-suggestion-item km-press" onClick={() => !s.error && onSelect(s)}>
+        <div key={i} className="km-suggestion-item km-press" onClick={() => onSelect(s)}>
           <div className="km-suggestion-icon">
-            {s.error ? <AlertCircle size={14} color="var(--coca-red)" /> : <MapPin size={14} />}
+            <MapPin size={14} />
           </div>
           <div className="km-suggestion-content">
-            <div className="km-suggestion-addr" style={{ color: s.error ? 'var(--coca-red)' : 'inherit' }}>{s.address}</div>
-            <div className="km-suggestion-meta">{s.error ? 'PROBLEMA TÉCNICO' : 'SUGESTÃO · GPS OK'}</div>
+            <div className="km-suggestion-addr">{s.address}</div>
+            <div className="km-suggestion-meta">
+              {s.type === 'house' ? 'ENDEREÇO' : s.type === 'street' ? 'RUA' : s.type === 'yes' || s.type === 'commercial' ? 'EMPRESA' : 'LOCAL'} · GPS OK
+            </div>
           </div>
         </div>
       ))}
@@ -1012,38 +1027,40 @@ export default function KmTracker() {
     return () => { cancelled = true; };
   }, [origin.lat, origin.lng, destination.lat, destination.lng]);
 
-  // ─── AUTOCOMPLETE (INTELIGÊNCIA 2.0) ────────────────────────────────────
+  // ─── AUTOCOMPLETE (PHOTON API — GRATUITO, SEM CHAVE) ─────────────────
   useEffect(() => {
-    if (!origin.address || origin.lat != null || origin.address.length < 5) {
+    if (!origin.address || origin.lat != null || origin.address.length < 3) {
       setOriginSuggestions([]); return;
     }
-    const apiKey = localStorage.getItem(GEMINI_KEY);
-    if (!apiKey) return;
-
     const timer = setTimeout(async () => {
       setLoading(prev => ({ ...prev, origin: true }));
-      const list = await resolvePlaceWithGemini(origin.address, apiKey);
+      // 1. Busca principal via Photon (instantânea)
+      let list = await searchAddressesPhoton(origin.address);
+      // 2. Fallback via Gemini se Photon não encontrou nada (para empresas, nomes comerciais)
+      if (list.length === 0) {
+        const apiKey = localStorage.getItem(GEMINI_KEY);
+        if (apiKey) list = await resolvePlaceWithGemini(origin.address, apiKey);
+      }
       setOriginSuggestions(list || []);
       setLoading(prev => ({ ...prev, origin: false }));
-    }, 700);
-
+    }, 400);
     return () => clearTimeout(timer);
   }, [origin.address, origin.lat]);
 
   useEffect(() => {
-    if (!destination.address || destination.lat != null || destination.address.length < 5) {
+    if (!destination.address || destination.lat != null || destination.address.length < 3) {
       setDestinationSuggestions([]); return;
     }
-    const apiKey = localStorage.getItem(GEMINI_KEY);
-    if (!apiKey) return;
-
     const timer = setTimeout(async () => {
       setLoading(prev => ({ ...prev, destination: true }));
-      const list = await resolvePlaceWithGemini(destination.address, apiKey);
+      let list = await searchAddressesPhoton(destination.address);
+      if (list.length === 0) {
+        const apiKey = localStorage.getItem(GEMINI_KEY);
+        if (apiKey) list = await resolvePlaceWithGemini(destination.address, apiKey);
+      }
       setDestinationSuggestions(list || []);
       setLoading(prev => ({ ...prev, destination: false }));
-    }, 700);
-
+    }, 400);
     return () => clearTimeout(timer);
   }, [destination.address, destination.lat]);
 
@@ -1753,12 +1770,11 @@ export default function KmTracker() {
               )}
             </div>
             <div style={{ position: 'relative', zIndex: 50 }}>
-              <textarea value={origin.address} onChange={e => setOrigin({ address: e.target.value, lat: null, lng: null })} placeholder="Endereço de partida" rows={2} className="km-textarea" />
+              <textarea value={origin.address} onChange={e => setOrigin({ address: e.target.value, lat: null, lng: null })} placeholder="Ex: Germano Justus, Curitiba" rows={2} className="km-textarea" />
               <SuggestionsList 
                 suggestions={originSuggestions} 
                 onSelect={(s) => selectSuggestion('origin', s)} 
                 loading={loading.origin} 
-                hasKey={!!localStorage.getItem(GEMINI_KEY)}
               />
             </div>
             <button onClick={() => capture('origin')} disabled={loading.origin} className="km-btn km-btn--red km-btn--block km-press">
@@ -1785,12 +1801,11 @@ export default function KmTracker() {
               )}
             </div>
             <div style={{ position: 'relative', zIndex: 40 }}>
-              <textarea value={destination.address} onChange={e => setDestination({ address: e.target.value, lat: null, lng: null })} placeholder="Endereço de chegada" rows={2} className="km-textarea" />
+              <textarea value={destination.address} onChange={e => setDestination({ address: e.target.value, lat: null, lng: null })} placeholder="Ex: FEMSA, Ponta Grossa" rows={2} className="km-textarea" />
               <SuggestionsList 
                 suggestions={destinationSuggestions} 
                 onSelect={(s) => selectSuggestion('destination', s)} 
                 loading={loading.destination} 
-                hasKey={!!localStorage.getItem(GEMINI_KEY)}
               />
             </div>
             <button onClick={() => capture('destination')} disabled={loading.destination} className="km-btn km-btn--ink km-btn--block km-press">
