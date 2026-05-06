@@ -265,50 +265,110 @@ Retorne SOMENTE o JSON puro, sem explicações, sem formatação markdown.`;
 }
 
 /**
- * Photon API (OpenStreetMap) — busca endereços em tempo real, GRATUITA, SEM chave API
- * Retorna array de: { address, lat, lng, type }
+ * Photon + Nominatim — busca endereços com números em tempo real
+ * Estratégia dupla:
+ *   1. Photon para busca rápida geral
+ *   2. Nominatim para endereços numerados específicos
+ * Retorna array de: { address, lat, lng, type, number }
  */
 async function searchAddressesPhoton(query) {
   if (!query || query.length < 3) return [];
+  
+  // Detectar se o usuário digitou um número junto (ex: "Germano Justus 500")
+  const numberMatch = query.match(/^(.+?)\s+(\d{1,6})\s*$/);
+  const streetPart = numberMatch ? numberMatch[1].trim() : query;
+  const numberPart = numberMatch ? numberMatch[2] : null;
+  
   try {
-    const encoded = encodeURIComponent(query);
-    const url = `https://photon.komoot.io/api/?q=${encoded}&limit=6&lang=default&lat=-23.5&lon=-49.0`;
-    const response = await fetch(url);
-    if (!response.ok) return [];
-    const data = await response.json();
-    if (!data.features || data.features.length === 0) return [];
+    // Busca paralela: Photon (rápida) + Nominatim (com números)
+    const searches = [];
     
-    return data.features.map(f => {
+    // 1. Photon — busca principal
+    const photonUrl = `https://photon.komoot.io/api/?q=${encodeURIComponent(query)}&limit=6&lang=default&lat=-23.5&lon=-49.0`;
+    searches.push(
+      fetch(photonUrl).then(r => r.ok ? r.json() : { features: [] }).catch(() => ({ features: [] }))
+    );
+    
+    // 2. Nominatim — busca com número (se detectado) ou busca estruturada
+    const nomQuery = encodeURIComponent(query);
+    const nomUrl = `https://nominatim.openstreetmap.org/search?q=${nomQuery}&format=json&addressdetails=1&accept-language=pt-BR&limit=5&countrycodes=br`;
+    searches.push(
+      fetch(nomUrl).then(r => r.ok ? r.json() : []).catch(() => [])
+    );
+    
+    const [photonData, nomResults] = await Promise.all(searches);
+    
+    // Processar resultados do Photon
+    const photonResults = (photonData.features || []).map(f => {
       const p = f.properties || {};
       const coords = f.geometry?.coordinates || [];
       const parts = [];
       if (p.name && p.name !== p.street) parts.push(p.name);
       if (p.street) {
-        let streetPart = p.street;
-        if (p.housenumber) streetPart += `, ${p.housenumber}`;
-        parts.push(streetPart);
+        let streetStr = p.street;
+        if (p.housenumber) streetStr += `, ${p.housenumber}`;
+        else if (numberPart) streetStr += `, ${numberPart}`;
+        parts.push(streetStr);
       }
       if (p.district || p.locality) parts.push(p.district || p.locality);
       if (p.city || p.town || p.village) {
         let cityPart = p.city || p.town || p.village;
-        if (p.state) {
-          const stateAbbr = STATE_MAP[p.state] || p.state;
-          cityPart += ` - ${stateAbbr}`;
-        }
+        if (p.state) cityPart += ` - ${STATE_MAP[p.state] || p.state}`;
         parts.push(cityPart);
       }
       if (p.postcode) parts.push(p.postcode);
-      
-      const address = parts.filter(Boolean).join(', ') || p.name || query;
       return {
-        address,
+        address: parts.filter(Boolean).join(', ') || p.name || query,
         lat: coords[1],
         lng: coords[0],
-        type: p.osm_value || p.type || 'place'
+        type: p.osm_value || p.type || 'place',
+        number: p.housenumber || numberPart || null
       };
     }).filter(s => s.lat && s.lng);
+    
+    // Processar resultados do Nominatim (tem números melhores)
+    const nomFormatted = (nomResults || []).map(item => {
+      const a = item.address || {};
+      const parts = [];
+      const street = a.road || a.pedestrian || a.path || '';
+      const num = a.house_number || '';
+      if (street) {
+        parts.push(num ? `${street}, ${num}` : street);
+      }
+      if (a.suburb || a.neighbourhood) parts.push(a.suburb || a.neighbourhood);
+      const city = a.city || a.town || a.village || '';
+      if (city) {
+        const st = STATE_MAP[a.state || ''] || a.state || '';
+        parts.push(st ? `${city} - ${st}` : city);
+      }
+      if (a.postcode) parts.push(a.postcode);
+      return {
+        address: parts.filter(Boolean).join(', ') || item.display_name || query,
+        lat: parseFloat(item.lat),
+        lng: parseFloat(item.lon),
+        type: num ? 'house' : 'street',
+        number: num || null
+      };
+    }).filter(s => s.lat && s.lng);
+    
+    // Combinar resultados: priorizar os que têm número
+    const seen = new Set();
+    const combined = [];
+    
+    // Primeiro: resultados com número (do Nominatim)
+    for (const r of nomFormatted) {
+      const key = `${r.lat.toFixed(4)},${r.lng.toFixed(4)}`;
+      if (!seen.has(key)) { seen.add(key); combined.push(r); }
+    }
+    // Depois: resultados do Photon
+    for (const r of photonResults) {
+      const key = `${r.lat.toFixed(4)},${r.lng.toFixed(4)}`;
+      if (!seen.has(key)) { seen.add(key); combined.push(r); }
+    }
+    
+    return combined.slice(0, 6);
   } catch (err) {
-    console.error('Photon search error:', err);
+    console.error('Address search error:', err);
     return [];
   }
 }
@@ -632,7 +692,11 @@ function SuggestionsList({ suggestions, onSelect, loading }) {
           <div className="km-suggestion-content">
             <div className="km-suggestion-addr">{s.address}</div>
             <div className="km-suggestion-meta">
-              {s.type === 'house' ? 'ENDEREÇO' : s.type === 'street' ? 'RUA' : s.type === 'yes' || s.type === 'commercial' ? 'EMPRESA' : 'LOCAL'} · GPS OK
+              {s.number ? (
+                <><span className="km-suggestion-badge">Nº {s.number}</span> ENDEREÇO · GPS OK</>
+              ) : (
+                <>{s.type === 'house' ? 'ENDEREÇO' : s.type === 'street' ? 'RUA' : s.type === 'yes' || s.type === 'commercial' ? 'EMPRESA' : 'LOCAL'} · GPS OK</>
+              )}
             </div>
           </div>
         </div>
@@ -3462,6 +3526,19 @@ body {
   font-family: 'Geist Mono', monospace;
   letter-spacing: 0.04em;
   text-transform: uppercase;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.km-suggestion-badge {
+  display: inline-block;
+  background: var(--coca-red);
+  color: #FFF;
+  font-size: 9px;
+  padding: 1px 6px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  font-family: 'Geist Mono', monospace;
 }
 .km-suggestions--warn {
   border-color: var(--coca-red);
