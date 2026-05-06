@@ -270,6 +270,7 @@ Retorne SOMENTE o JSON puro, sem explicações, sem formatação markdown.`;
  */
 async function resolvePlaceWithGemini(query, apiKey) {
   if (!query || query.length < 3) return [];
+  console.log('Resolving place with Gemini:', query);
   const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
   const prompt = `Você é um resolvedor de endereços geográficos especializado no Brasil.
 Seu objetivo é fornecer uma lista de sugestões de endereços reais baseados em buscas por "Nome de Empresa + Localidade" ou endereços incompletos.
