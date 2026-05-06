@@ -293,10 +293,16 @@ REGRAS:
     if (!response.ok) return [];
     const data = await response.json();
     const text = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
-    const cleaned = text.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+    
+    // Extração robusta de JSON (pega o que está entre colchetes)
+    const jsonMatch = text.match(/\[[\s\S]*\]/);
+    const cleaned = jsonMatch ? jsonMatch[0] : text.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+    
+    console.log('Gemini Autocomplete Response:', cleaned);
     const parsed = JSON.parse(cleaned);
     return Array.isArray(parsed) ? parsed : [parsed];
-  } catch {
+  } catch (err) {
+    console.error('Gemini Autocomplete Error:', err);
     return [];
   }
 }
@@ -992,7 +998,6 @@ export default function KmTracker() {
 
   // ─── AUTOCOMPLETE (INTELIGÊNCIA 2.0) ────────────────────────────────────
   useEffect(() => {
-    // Se já tem lat/lng, não precisa de sugestões
     if (!origin.address || origin.lat != null || origin.address.length < 5) {
       setOriginSuggestions([]); return;
     }
@@ -1004,13 +1009,12 @@ export default function KmTracker() {
       const list = await resolvePlaceWithGemini(origin.address, apiKey);
       setOriginSuggestions(list || []);
       setLoading(prev => ({ ...prev, origin: false }));
-    }, 1000);
+    }, 700);
 
     return () => clearTimeout(timer);
   }, [origin.address, origin.lat]);
 
   useEffect(() => {
-    // Se já tem lat/lng, não precisa de sugestões
     if (!destination.address || destination.lat != null || destination.address.length < 5) {
       setDestinationSuggestions([]); return;
     }
@@ -1022,7 +1026,7 @@ export default function KmTracker() {
       const list = await resolvePlaceWithGemini(destination.address, apiKey);
       setDestinationSuggestions(list || []);
       setLoading(prev => ({ ...prev, destination: false }));
-    }, 1000);
+    }, 700);
 
     return () => clearTimeout(timer);
   }, [destination.address, destination.lat]);
