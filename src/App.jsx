@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { jsPDF } from 'jspdf';
 import { autoCropDocument } from './WarpHelper.js';
-import { MapPin, Flag, Save, Download, Trash2, Loader2, AlertCircle, X, Navigation, ChevronDown, ChevronUp, ArrowDown, DollarSign, Calendar, TrendingUp, History, Sun, Moon, Volume2, VolumeX, Vibrate, Camera, Settings, Receipt, ParkingCircle, Eye, Check, Image as ImageIcon, FileText, Aperture, Pencil } from 'lucide-react';
+import { MapPin, Flag, Save, Download, Trash2, Loader2, AlertCircle, X, Navigation, ChevronDown, ChevronUp, ArrowDown, DollarSign, Calendar, TrendingUp, History, Sun, Moon, Volume2, VolumeX, Vibrate, Camera, Settings, Receipt, ParkingCircle, Eye, Check, Image as ImageIcon, FileText, Aperture, Pencil, Tag } from 'lucide-react';
 import * as XLSX from 'xlsx';
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -276,7 +276,9 @@ async function resolveExactCEP(streetName, city, uf, houseNumber) {
       .replace(/^(Rua|Avenida|Av\.|Travessa|Alameda|Praça|Rodovia|Estrada)\s+/i, '')
       .trim();
     const url = `https://viacep.com.br/ws/${encodeURIComponent(uf)}/${encodeURIComponent(city)}/${encodeURIComponent(cleanStreet)}/json/`;
-    const response = await fetch(url);
+    // Usar proxy para evitar CORS no navegador
+    const proxyUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`;
+    const response = await fetch(proxyUrl);
     if (!response.ok) return null;
     const data = await response.json();
     if (!Array.isArray(data) || data.length === 0) return null;
