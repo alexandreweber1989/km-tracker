@@ -935,6 +935,37 @@ function Dashboard({ trips, receipts = [] }) {
         </div>
       </section>
 
+      {/* DETAILED EXPENSES ANALYSIS */}
+      <section className="km-card km-card--expenses-analysis">
+        <header className="km-card-head km-card-head--bordered">
+          <div className="km-row-tight">
+            <Tag size={14} strokeWidth={2.4} />
+            <span className="km-mono km-mono-label">ANÁLISE DE DESPESAS</span>
+          </div>
+        </header>
+        <div className="km-expenses-grid">
+          <div className="km-expense-item">
+            <div className="km-expense-main">
+              <span className="km-mono km-mono-label">PEDÁGIOS</span>
+              <span className="km-expense-val">{brlFmt.format(stats.totalPedagios)}</span>
+            </div>
+            <div className="km-expense-footer">
+              <span className="km-mono km-mono-tiny">{stats.totalPedagios > 0 ? receipts.filter(r=>r.tipo==='pedagio').length : 0} REGISTROS</span>
+            </div>
+          </div>
+          <span className="km-divider-vert" />
+          <div className="km-expense-item">
+            <div className="km-expense-main">
+              <span className="km-mono km-mono-label">ESTACIONAMENTOS</span>
+              <span className="km-expense-val">{brlFmt.format(stats.totalEstacionamentos)}</span>
+            </div>
+            <div className="km-expense-footer">
+              <span className="km-mono km-mono-tiny">{stats.totalEstacionamentos > 0 ? receipts.filter(r=>r.tipo==='estacionamento').length : 0} REGISTROS</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
       {/* PULL QUOTE EDITORIAL (1× per screen) */}
       {stats.bestDay && stats.totalKm > 0 && (
         <blockquote className="km-pullquote">
@@ -3175,6 +3206,48 @@ body {
 .km-pullquote cite {
   font-style: normal;
   color: var(--text-muted);
+}
+
+/* ─── EXPENSES ANALYSIS GRID ────────────────────────── */
+.km-card--expenses-analysis {
+  background: var(--bg-surface);
+  margin-top: 14px;
+}
+.km-expenses-grid {
+  display: flex;
+  align-items: stretch;
+  padding: 18px 0;
+}
+.km-expense-item {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  text-align: center;
+  padding: 0 12px;
+}
+.km-expense-main {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.km-expense-val {
+  font-family: var(--font-display);
+  font-weight: 800;
+  font-size: 24px;
+  color: var(--coca-red);
+  letter-spacing: -0.02em;
+  line-height: 1;
+}
+.km-expense-footer {
+  margin-top: 8px;
+  opacity: 0.7;
+}
+.km-divider-vert {
+  width: 1.5px;
+  background: var(--border-default);
+  margin: 6px 0;
 }
 
 /* ─── ROWS (BY DAY / BY MONTH) ─────────────────────── */
